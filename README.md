@@ -11,6 +11,7 @@
 [![Windows x64](https://img.shields.io/badge/Windows-10%2F11%20x64-0078D6?logo=windows)](#requirements)
 [![Made with Go](https://img.shields.io/badge/Made%20with-Go-00ADD8?logo=go)](#building-from-source)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue)](LICENSE.md)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/burnersen)
 
 **[⬇️ Download the latest release](https://github.com/burnersen/DupFinder/releases/latest)**
 
