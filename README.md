@@ -126,6 +126,18 @@ DupFinder does **not** bundle FFmpeg. On first run it downloads an official stat
 
 ---
 
+## 💬 Feedback & contributions
+
+Found a bug or have a feature wish? Please open an issue on the [GitHub repository](https://github.com/burnersen/DupFinder/issues) — feedback is genuinely welcome. Forks and pull requests for noncommercial improvements are too.
+
+---
+
+## ☕ Support
+
+DupFinder is free and made in my spare time. If it saved you some disk space and you'd like to say thanks, you can [buy me a coffee on Ko-fi](https://ko-fi.com/burnersen). Completely optional — and thank you!
+
+---
+
 ## ⚠️ Disclaimer
 
 DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care — deleted files go to the recycle bin, not a permanent delete — but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See the *No Liability* clause of the [license](LICENSE.md).

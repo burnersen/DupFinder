@@ -1,3 +1,7 @@
+// DupFinder — Required Notice: Copyright (c) 2026 burnersen — DupFinder
+// Licensed under the PolyForm Noncommercial License 1.0.0 (non-commercial use only).
+// Full terms: LICENSE.md · https://polyformproject.org/licenses/noncommercial/1.0.0
+
 package main
 
 import (
@@ -558,15 +562,13 @@ func (s *server) handleReveal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// explorer /select,"pfad"  – öffnet den enthaltenden Ordner und markiert
-	// die Datei. Achtung: Argument muss als EIN String "/select,<pfad>" übergeben
-	// werden, sonst trennt Explorer falsch.
-	cmd := exec.Command("explorer", "/select,"+req.Path)
-	if err := cmd.Start(); err != nil {
+	// Öffnet den enthaltenden Ordner und markiert die Datei. Die plattform-
+	// spezifische Umsetzung (inkl. korrekter Anführungszeichen für /select)
+	// steckt in reveal_windows.go bzw. reveal_other.go.
+	if err := revealInExplorer(req.Path); err != nil {
 		http.Error(w, "Konnte Explorer nicht starten: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	go func() { _ = cmd.Wait() }()
 
 	writeJSON(w, map[string]any{"ok": true})
 }

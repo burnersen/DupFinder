@@ -1,3 +1,6 @@
+// DupFinder — Required Notice: Copyright (c) 2026 burnersen — DupFinder
+// Licensed under the PolyForm Noncommercial License 1.0.0 (non-commercial use only).
+// Full terms: LICENSE.md · https://polyformproject.org/licenses/noncommercial/1.0.0
 'use strict';
 
 let currentState = null;
@@ -506,10 +509,15 @@ function advanceFocus() {
 
 function updateFocusVisuals() {
   document.querySelectorAll('.cluster.focused').forEach(el => el.classList.remove('focused'));
-  const all = document.querySelectorAll('.cluster');
-  if (all[focusedClusterIdx]) {
-    all[focusedClusterIdx].classList.add('focused');
-    all[focusedClusterIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Den aktiven Cluster über sein stabiles data-idx finden, NICHT über die
+  // Position in der DOM-Liste: Entschiedene Cluster wandern in die Schublade
+  // "Bereits entschieden" ans Ende, dadurch passt die Listen-Position nicht mehr
+  // zum Index aus currentState.clusters. Über das data-idx (= genau dieser Index)
+  // treffen Markierung und Zentrieren immer den richtigen Cluster.
+  const el = document.querySelector('.cluster[data-idx="' + focusedClusterIdx + '"]');
+  if (el) {
+    el.classList.add('focused');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 }
 
