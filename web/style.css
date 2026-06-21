@@ -1,0 +1,617 @@
+:root {
+  --bg: #1a1d23;
+  --bg-elevated: #252932;
+  --bg-card: #2d323d;
+  --border: #3a4050;
+  --text: #e8eaed;
+  --text-muted: #9aa0a6;
+  --accent: #4a9eff;
+  --accent-dark: #2d7dd2;
+  --keep: #4ade80;
+  --keep-bg: rgba(74, 222, 128, 0.15);
+  --delete: #f87171;
+  --delete-bg: rgba(248, 113, 113, 0.15);
+  --ignore: #fbbf24;
+  --ignore-bg: rgba(251, 191, 36, 0.15);
+  --best: #4ade80;
+  --warn-bg: #3a2c1a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ====================================================================== */
+/* Topbar */
+/* ====================================================================== */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 24px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.5px;
+}
+
+.stats {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.stat-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-val {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.stat.highlight .stat-val {
+  color: var(--keep);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+button:hover {
+  background: var(--border);
+}
+
+button.danger {
+  border-color: #5a3030;
+}
+
+button.danger:hover {
+  background: #5a3030;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+button.primary:hover {
+  background: var(--accent-dark);
+}
+
+/* ====================================================================== */
+/* Progress */
+/* ====================================================================== */
+
+.progress {
+  padding: 8px 24px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.progress.hidden { display: none; }
+
+.progress-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+/* ====================================================================== */
+/* Roots Bar */
+/* ====================================================================== */
+
+.roots-bar {
+  padding: 8px 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.roots-bar .root-tag {
+  display: inline-block;
+  background: var(--bg-card);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+  font-family: 'Consolas', monospace;
+  color: var(--text);
+}
+
+/* ====================================================================== */
+/* Help Panel */
+/* ====================================================================== */
+
+.help-panel {
+  margin: 16px 24px;
+  padding: 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.help-panel.hidden { display: none; }
+
+.help-panel h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.help-panel h3:not(:first-child) { margin-top: 20px; }
+
+.help-panel table {
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.help-panel td {
+  padding: 4px 16px 4px 0;
+  vertical-align: top;
+}
+
+.help-panel kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  margin: 0 2px;
+}
+
+.help-panel ul { margin: 0; padding-left: 20px; }
+.help-panel li { margin-bottom: 4px; }
+
+.muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ====================================================================== */
+/* Cluster */
+/* ====================================================================== */
+
+#clustersContainer {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cluster {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: opacity 0.3s, max-height 0.3s;
+}
+
+.cluster.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.cluster.decided {
+  opacity: 0.6;
+}
+
+.cluster-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.cluster-id {
+  font-family: 'Consolas', monospace;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.cluster-savings {
+  color: var(--keep);
+  font-weight: 600;
+}
+
+.cluster-meta {
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.cluster-body {
+  padding: 10px;
+}
+
+/* Video Cards: horizontal nebeneinander */
+.videos-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 380px));
+  gap: 12px;
+  justify-content: start;
+}
+
+.video-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.video-card.action-keep {
+  border-color: var(--keep);
+  background: var(--keep-bg);
+}
+
+.video-card.action-delete {
+  border-color: var(--delete);
+  background: var(--delete-bg);
+}
+
+.video-card.action-ignore {
+  border-color: var(--ignore);
+  background: var(--ignore-bg);
+}
+
+.video-num {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 12px;
+  z-index: 2;
+}
+
+.video-thumbs {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: black;
+}
+
+.video-thumbs img {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  background: #000;
+  display: block;
+}
+
+.video-meta {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.video-meta .filename {
+  font-weight: 600;
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.video-meta .path {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  font-size: 11px;
+}
+
+.meta-grid .k {
+  color: var(--text-muted);
+}
+
+.meta-grid .v.best {
+  color: var(--best);
+  font-weight: 600;
+}
+
+/* ====================================================================== */
+/* Video-Tools (Abspielen / Ordner öffnen)                                */
+/* Sitzt zwischen .video-meta und .video-actions.                          */
+/* ====================================================================== */
+
+.video-tools {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.video-tools button {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.video-tools button:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.video-actions {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.video-actions button {
+  flex: 1;
+  padding: 4px 2px;
+  font-size: 10px;
+}
+
+.video-actions button.active.keep {
+  background: var(--keep);
+  color: black;
+  border-color: var(--keep);
+}
+
+.video-actions button.active.delete {
+  background: var(--delete);
+  color: black;
+  border-color: var(--delete);
+}
+
+.video-actions button.active.ignore {
+  background: var(--ignore);
+  color: black;
+  border-color: var(--ignore);
+}
+
+.cluster-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+}
+
+.cluster-footer .summary {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cluster-footer .summary strong {
+  color: var(--text);
+}
+
+.cluster-footer .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* Decided View */
+.cluster.decided .cluster-body { display: none; }
+.cluster.decided .cluster-footer { display: none; }
+.cluster .decided-summary { display: none; padding: 12px 16px; font-size: 13px; }
+.cluster.decided .decided-summary { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+
+/* ====================================================================== */
+/* Decided Drawer (Schublade für entschiedene Cluster)                    */
+/* ====================================================================== */
+
+.decided-drawer {
+  margin-top: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.decided-drawer-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  background: var(--bg-card);
+  font-size: 13px;
+  user-select: none;
+  list-style: none;
+}
+
+/* Standard-Marker des <summary> ausblenden, eigenes Pfeil-Icon davor */
+.decided-drawer-summary::-webkit-details-marker { display: none; }
+.decided-drawer-summary::marker { display: none; content: ''; }
+
+.decided-drawer-summary::before {
+  content: '▶';
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+
+.decided-drawer[open] > .decided-drawer-summary::before {
+  transform: rotate(90deg);
+}
+
+.decided-drawer-summary:hover {
+  background: var(--border);
+}
+
+.decided-drawer-summary .drawer-icon {
+  color: var(--keep);
+  font-weight: 700;
+}
+
+.decided-drawer-summary .drawer-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.decided-drawer-summary .drawer-count {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-family: 'Consolas', monospace;
+}
+
+.decided-drawer-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Cluster in der Schublade: Rahmen weglassen, sind ja schon im Drawer-Rahmen */
+.decided-drawer-body .cluster {
+  background: var(--bg-card);
+}
+
+/* ====================================================================== */
+/* Empty State */
+/* ====================================================================== */
+
+.empty-state {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-muted);
+}
+
+.empty-state h2 { color: var(--text); }
+
+/* ====================================================================== */
+/* Toast */
+/* ====================================================================== */
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 12px 20px;
+  border-radius: 8px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-width: 400px;
+}
+
+.toast.hidden { display: none; }
+
+.toast.success { border-color: var(--keep); }
+.toast.error { border-color: var(--delete); }
+.toast.info { border-color: var(--accent); }
+
+/* ====================================================================== */
+/* Dialog */
+/* ====================================================================== */
+
+dialog {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  min-width: 400px;
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+dialog h3 {
+  margin: 0 0 12px;
+}
+
+dialog input {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.dialog-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}

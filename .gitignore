@@ -1,0 +1,22 @@
+# ── Heruntergeladene Tools (werden zur Laufzeit geladen, nicht mitliefern) ──
+/bin/
+
+# ── Laufzeit-/Programmdaten (enthält echte Dateipfade!) ──
+/.DupFinder.data/
+
+# ── Gebaute Programmdateien (gehören als Release-Asset, nicht ins Repo) ──
+*.exe
+/dupfinder
+
+# ── Lokale Sicherungen / Start-/Test-Skripte (private Pfade) ──
+/_backup_*/
+*.bat
+
+# ── Interne Notizen / Arbeitsanweisungen (nicht öffentlich) ──
+/_claude_memory/
+CLAUDE.md
+README_BUILD.txt
+
+# ── Sonstiges ──
+*.log
+*.tmp

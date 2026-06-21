@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>DupFinder</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">DupFinder</div>
+  <div class="stats" id="stats">
+    <span class="stat"><span class="stat-label">Offen</span> <span class="stat-val" id="pendingCount">–</span></span>
+    <span class="stat"><span class="stat-label">Erledigt</span> <span class="stat-val" id="decidedCount">–</span></span>
+    <span class="stat"><span class="stat-label">Ignoriert</span> <span class="stat-val" id="ignoredCount">–</span></span>
+    <span class="stat highlight"><span class="stat-label">Sparpotenzial</span> <span class="stat-val" id="totalSavings">–</span></span>
+    <span class="stat hidden" id="readErrorsStat" title="Dateien, die nicht gelesen werden konnten (defekt/gesperrt)"><span class="stat-label">⚠ Nicht lesbar</span> <span class="stat-val" id="readErrors">0</span></span>
+  </div>
+  <div class="actions">
+    <button id="btnRescan" title="Neu scannen">↻ Rescan</button>
+    <button id="btnAddRoot" title="Verzeichnis hinzufügen">+ Pfad</button>
+    <button id="btnHelp" title="Hilfe">?</button>
+    <button id="btnShutdown" class="danger" title="Programm beenden">⏻ Beenden</button>
+  </div>
+</header>
+
+<div id="progress" class="progress hidden">
+  <div class="progress-text" id="progressText">Bereit</div>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+</div>
+
+<div id="rootsBar" class="roots-bar"></div>
+
+<div id="helpPanel" class="help-panel hidden">
+  <h3>Tastenkürzel</h3>
+  <table>
+    <tr><td><kbd>1</kbd>…<kbd>9</kbd></td><td>Aktion auf Video N umschalten (Behalten ↔ Löschen)</td></tr>
+    <tr><td><kbd>Shift</kbd>+<kbd>1…9</kbd></td><td>Video N als <em>Ignorieren</em> markieren</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Cluster bestätigen (Aktionen ausführen)</td></tr>
+    <tr><td><kbd>S</kbd></td><td>Cluster überspringen (alles behalten)</td></tr>
+    <tr><td><kbd>U</kbd></td><td>Letzte Entscheidung rückgängig</td></tr>
+    <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Zwischen Clustern springen</td></tr>
+    <tr><td><kbd>?</kbd></td><td>Diese Hilfe ein/ausblenden</td></tr>
+  </table>
+  <h3>Aktionen</h3>
+  <ul>
+    <li><strong>Behalten</strong>: Datei bleibt erhalten.</li>
+    <li><strong>Löschen</strong>: Datei wandert in den <em>Windows-Papierkorb</em> (kann von dort wiederhergestellt werden).</li>
+    <li><strong>Ignorieren</strong>: Datei wird beim nächsten Scan nicht mehr in Cluster einbezogen, bleibt aber an ihrem Ort.</li>
+  </ul>
+  <p class="muted">Standardvorschlag: die größte Datei pro Cluster wird als „Behalten" markiert, alle kleineren als „Löschen". Du kannst das jederzeit ändern.</p>
+</div>
+
+<main id="clustersContainer">
+  <div class="empty-state" id="emptyState">
+    <h2>Lade…</h2>
+    <p>Der Scan läuft im Hintergrund. Sobald Cluster gefunden werden, erscheinen sie hier.</p>
+  </div>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<dialog id="addRootDialog">
+  <form method="dialog">
+    <h3>Pfad hinzufügen</h3>
+    <p class="muted">Vollständigen Pfad zu einem Verzeichnis eingeben (z.B. <code>D:\Filme</code>).</p>
+    <input type="text" id="addRootInput" placeholder="C:\..." style="width:100%">
+    <p class="muted">Nach dem Hinzufügen wird automatisch ein Rescan ausgelöst.</p>
+    <div class="dialog-buttons">
+      <button value="cancel">Abbrechen</button>
+      <button value="ok" id="addRootOk">Hinzufügen</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
