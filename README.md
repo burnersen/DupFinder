@@ -13,7 +13,9 @@
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue)](LICENSE.md)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/burnersen)
 
-**[⬇️ Download the latest release](https://github.com/burnersen/DupFinder/releases/latest)**
+**[⬇️ Download the latest release](https://github.com/burnersen/DupFinder/releases/latest)** · **[🌐 Website](https://tech.burnersen.de/en/tools/dupfinder-en/)**
+
+<sub>🇩🇪 Auf Deutsch: [tech.burnersen.de/tools/dupfinder](https://tech.burnersen.de/tools/dupfinder/)</sub>
 
 <!-- Optional: drop a screenshot at .github/screenshot.png and uncomment:
 <img src=".github/screenshot.png" alt="DupFinder web UI showing a duplicate group" width="860">
