@@ -223,6 +223,14 @@ jobs:
           } else {
             $footer = "DupFinder.exe is not code signed, so Windows SmartScreen may warn. [Code signing policy]($policy)"
           }
+          # A friendly line for the people who read release texts: the ones
+          # updating, who are happy enough to stay.
+          $repo = "https://github.com/$env:GITHUB_REPOSITORY"
+          if ($env:SIGNED -eq 'true') {
+              $footer += "`n`n💜 Happy with DupFinder? A ⭐ on [GitHub]($repo) is the easiest way to let me know, and it helps others find it. Or [tell me what you use it for]($repo/issues/new)."
+          } else {
+              $footer += "`n`n💜 Happy with DupFinder? A ⭐ on [GitHub]($repo) is the easiest way to let me know, and it helps DupFinder qualify for free code signing, so the Windows warning goes away for everyone. Or [tell me what you use it for]($repo/issues/new)."
+          }
           [IO.File]::WriteAllText("$PWD/release-notes.md", $notes.TrimEnd() + "`n`n---`n`n$footer`n", [Text.UTF8Encoding]::new($false))
 
           Write-Host "Publishing $tag with DupFinder.exe ($((Get-Item DupFinder.exe).Length) bytes)."
