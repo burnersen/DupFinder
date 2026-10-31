@@ -1,11 +1,14 @@
 # Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org).
-
-> **Status:** DupFinder has applied to the SignPath Foundation. Until the
-> signing is active, `DupFinder.exe` is not signed. Every release says in
-> its text whether its exe is signed.
+> **Status:** `DupFinder.exe` is not code signed yet. Free code signing
+> through the [SignPath Foundation](https://signpath.org) is planned as soon as
+> DupFinder is known well enough to qualify. Everything for it is prepared, and
+> this policy already describes how it will work. Every release says in its
+> text whether its files are signed.
+>
+> Once signing is active: free code signing provided by
+> [SignPath.io](https://about.signpath.io), certificate by
+> [SignPath Foundation](https://signpath.org).
 
 ## What is signed
 
