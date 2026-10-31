@@ -27,7 +27,7 @@ var webAssets embed.FS
 
 // appVersion ist die zentrale Versionsnummer (semantisch). Bei jedem Release nur
 // hier erhöhen.
-const appVersion = "1.0.1"
+const appVersion = "1.1.0"
 
 var shutdownRequested atomic.Bool
 
