@@ -20,3 +20,6 @@ README_BUILD.txt
 # ── Sonstiges ──
 *.log
 *.tmp
+
+# ── Windows-Ressourcen (Versionsinfo), erzeugt vom Release-Workflow aus winres/winres.json ──
+*.syso

@@ -1,0 +1,4 @@
+# Go sources stay LF on every checkout (also on Windows runners), so gofmt
+# does not report every file as unformatted.
+*.go   text eol=lf
+go.mod text eol=lf
