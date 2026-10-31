@@ -10,10 +10,10 @@
 
 [![Windows x64](https://img.shields.io/badge/Windows-10%2F11%20x64-0078D6?logo=windows)](#requirements)
 [![Made with Go](https://img.shields.io/badge/Made%20with-Go-00ADD8?logo=go)](#building-from-source)
-[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue)](LICENSE.md)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/burnersen)
 
-**[⬇️ Download the latest release](https://github.com/burnersen/DupFinder/releases/latest)** · **[🌐 Website](https://tech.burnersen.de/en/tools/dupfinder-en/)**
+**[⬇️ Download the latest release](https://github.com/burnersen/DupFinder/releases/latest)** · **[🌐 Website](https://tech.burnersen.de/en/tools/dupfinder-en/)** · **[🔏 Code signing policy](CODE_SIGNING.md)** · **[☕ Buy me a coffee](https://ko-fi.com/burnersen)**
 
 <sub>🇩🇪 Auf Deutsch: [tech.burnersen.de/tools/dupfinder](https://tech.burnersen.de/tools/dupfinder/)</sub>
 
@@ -95,7 +95,9 @@ DupFinder runs fine with no configuration. For large libraries you can tweak:
 
 ## 🛡️ Windows SmartScreen / antivirus warnings
 
-Windows or your antivirus may warn you the first time you run `DupFinder.exe`. The honest reason: **the EXE is not code-signed** (signing certificates cost hundreds of euros per year, and this is a free hobby project). Unsigned Go binaries are common false-positive targets.
+Windows or your antivirus may warn you the first time you run `DupFinder.exe`. The honest reason: **the EXE is not code-signed yet** (signing certificates cost hundreds of euros per year, and this is a free hobby project). Free code signing through the [SignPath Foundation](https://signpath.org) is applied for and already prepared; see the [code signing policy](CODE_SIGNING.md). Until then, unsigned Go binaries are common false-positive targets.
+
+Every release is built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), never on a private PC.
 
 You don't have to trust it blindly:
 
@@ -115,13 +117,23 @@ go build -o DupFinder.exe .
 
 Requires Go 1.22+. FFmpeg is **not** needed to build — it is downloaded at runtime, never embedded.
 
+Releases are built by the [release workflow](.github/workflows/release.yml) on GitHub: push a tag `vX.Y.Z` equal to `appVersion` in `main.go`. It also writes name and version into the file properties (from [`winres/winres.json`](winres/winres.json)) and, once code signing is switched on, has the exe signed: see [`.signpath/README.md`](.signpath/README.md). "Run workflow" with "dry run" ticked builds and checks everything without publishing.
+
 ---
 
 ## 📜 License
 
-**DupFinder is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).**
+DupFinder is free software under the [GNU General Public License, version 3](LICENSE) — that version only (`GPL-3.0-only`).
 
-Free to use, study, modify and share for any **noncommercial** purpose: personal use, hobby, education, research. **Commercial use, resale or bundling into paid products is not permitted** without a separate license from the author.
+- **Use it:** Anyone may use DupFinder free of charge, at home or at work, and read, change and share its source code.
+- **The one condition:** Whoever passes on DupFinder or parts of it — unchanged, changed or built into a program of their own — must include the complete source code and pass everything on under the same license. A closed, paid product with DupFinder inside is therefore not possible.
+- **Free of charge:** DupFinder is and stays free. The official source is [github.com/burnersen/DupFinder](https://github.com/burnersen/DupFinder) — anyone asking money for DupFinder is selling you what you can get here for free.
+
+Versions up to and including 1.0.1 were released under the PolyForm Noncommercial License 1.0.0; every later version is under the GPLv3.
+
+### Code signing and privacy
+
+What is signed, who approves it and what DupFinder sends over the network (only the FFmpeg download): [code signing policy](CODE_SIGNING.md). To uninstall, delete the folder; nothing is written to the registry.
 
 ### FFmpeg
 
@@ -131,7 +143,7 @@ DupFinder does **not** bundle FFmpeg. On first run it downloads an official stat
 
 ## 💬 Feedback & contributions
 
-Found a bug or have a feature wish? Please open an issue on the [GitHub repository](https://github.com/burnersen/DupFinder/issues) — feedback is genuinely welcome. Forks and pull requests for noncommercial improvements are too.
+Found a bug or have a feature wish? Please open an issue on the [GitHub repository](https://github.com/burnersen/DupFinder/issues) — feedback is genuinely welcome. Forks and pull requests are too.
 
 ---
 
@@ -143,4 +155,4 @@ DupFinder is free and made in my spare time. If it saved you some disk space and
 
 ## ⚠️ Disclaimer
 
-DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care — deleted files go to the recycle bin, not a permanent delete — but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See the *No Liability* clause of the [license](LICENSE.md).
+DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care — deleted files go to the recycle bin, not a permanent delete — but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See sections 15 and 16 of the [license](LICENSE).

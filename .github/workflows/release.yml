@@ -1,0 +1,219 @@
+# DupFinder (https://github.com/burnersen/DupFinder)
+# Copyright (C) 2026 burnersen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Turns a pushed version tag into a finished release, built on GitHub and
+# nowhere else: vets and builds DupFinder.exe on Windows and publishes it as
+# the release asset.
+#
+# Two ways in:
+#   - push a tag vX.Y.Z (equal to appVersion in main.go), or
+#   - Actions > Release > Run workflow with an existing tag.
+# The release text is .github/release-notes/vX.Y.Z.md if that file exists,
+# otherwise the message of the annotated tag (git tag -a).
+#
+# Dry run: tick "dry run" when starting it by hand. The exe is built and
+# checked and stays on the run page as a workflow artifact; nothing is
+# signed or published. Pull requests that change this workflow, winres/ or
+# .signpath/ get a dry run by themselves.
+#
+# Code signing (SignPath Foundation) is prepared but off until the
+# repository has the variable SIGNPATH_ORGANIZATION_ID and the secret
+# SIGNPATH_API_TOKEN; see .signpath/README.md. Without them the exe is
+# released unsigned.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (for example v2.2.0)'
+        required: true
+      dry_run:
+        description: 'Dry run: build and check only, sign and publish nothing'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - '.signpath/**'
+      - 'winres/**'
+
+# Publishing needs write access to the repository contents; actions: read
+# lets SignPath fetch the unsigned exe from this run.
+permissions:
+  contents: write
+  actions: read
+
+env:
+  DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run == true }}
+
+jobs:
+  release:
+    runs-on: windows-latest
+    # Includes up to one hour of waiting for the signing approval.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The annotated tag message can be the release text, and it only
+          # exists in a clone that carries the tag objects.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # Not go-version-file: "go 1.22" in go.mod is the oldest Go the
+          # sources compile with, not the one a release should ship. This
+          # program downloads FFmpeg over HTTPS, so a Go with current
+          # security fixes matters.
+          go-version: 'stable'
+          cache: false
+
+      # A tag that disagrees with appVersion would publish an exe that names
+      # another version. A pull request has no tag: it builds the version in
+      # main.go.
+      - name: Tag matches appVersion
+        run: |
+          $match = Select-String -Path main.go -Pattern '^const appVersion = "(.+)"' | Select-Object -First 1
+          if (-not $match) {
+            Write-Host "::error::Could not find appVersion in main.go"
+            exit 1
+          }
+          $inCode = $match.Matches[0].Groups[1].Value
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $tag = "v$inCode" }
+          if ("v$inCode" -ne $tag) {
+            Write-Host "::error::Tag $tag does not match appVersion $inCode in main.go"
+            exit 1
+          }
+          Write-Host "Tag $tag matches appVersion $inCode."
+          "TAG=$tag" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "VERSION=$inCode" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: go vet
+        run: go vet ./...
+
+      # Name and version in the exe's file properties (right-click >
+      # Properties > Details). SignPath only signs an exe whose properties
+      # name DupFinder and the version of the release.
+      - name: File properties
+        run: go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out rsrc --arch amd64 --product-version $env:VERSION --file-version $env:VERSION
+
+      - name: Build
+        run: go build -trimpath -ldflags="-s -w" -o DupFinder.exe .
+
+      - name: Check the file properties
+        run: ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:VERSION -Path DupFinder.exe
+
+      # --- code signing ------------------------------------------------------
+      - name: 'code signing: on or off?'
+        id: signing
+        env:
+          ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          HAS_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        run: |
+          $hasOrganization = -not [string]::IsNullOrWhiteSpace($env:ORGANIZATION_ID)
+          $hasToken = $env:HAS_TOKEN -eq 'true'
+          if ($env:DRY_RUN -eq 'true') {
+            $on = $false
+            Write-Host 'Dry run: nothing is signed.'
+          } elseif ($hasOrganization -ne $hasToken) {
+            Write-Host '::error::Code signing is half set up: SIGNPATH_ORGANIZATION_ID and SIGNPATH_API_TOKEN must both be set, or neither (see .signpath/README.md).'
+            exit 1
+          } else {
+            $on = $hasOrganization -and $hasToken
+            Write-Host ($(if ($on) { 'Code signing is on.' } else { 'Code signing is off: this release is unsigned.' }))
+          }
+          "enabled=$($on.ToString().ToLower())" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: 'code signing: collect the exe'
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          New-Item -ItemType Directory sign/unsigned -Force | Out-Null
+          Copy-Item DupFinder.exe sign/unsigned/
+
+      - name: 'code signing: upload the exe'
+        id: unsigned
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned
+          path: sign/unsigned
+          if-no-files-found: error
+
+      - name: 'code signing: sign (approve the request in SignPath)'
+        if: steps.signing.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'DupFinder' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: sign/signed
+          parameters: |
+            version: "${{ env.VERSION }}"
+
+      - name: 'code signing: take over the signed exe'
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          Copy-Item sign/signed/DupFinder.exe DupFinder.exe -Force
+          ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:VERSION -Path DupFinder.exe -Signed
+
+      - name: 'dry run: keep the exe on the run page'
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: DupFinder.exe
+          retention-days: 7
+
+      # gh is preinstalled on GitHub runners and signs in with the token this
+      # workflow already holds, so no personal access token is involved.
+      - name: Publish release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.signing.outputs.enabled }}
+        run: |
+          $tag = $env:TAG
+          $title = "DupFinder $tag"
+          $file = ".github/release-notes/$tag.md"
+          if (Test-Path $file) {
+            $notes = [IO.File]::ReadAllText("$PWD/$file")
+          } else {
+            $notes = (git tag -l --format='%(contents)' $tag) -join "`n"
+          }
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            Write-Host "::error::No release text: add $file or create the tag with 'git tag -a'."
+            exit 1
+          }
+          # The release page is the download page, so it links the code
+          # signing policy and says whether this exe is signed.
+          $policy = "https://github.com/$env:GITHUB_REPOSITORY/blob/main/CODE_SIGNING.md"
+          if ($env:SIGNED -eq 'true') {
+            $footer = "DupFinder.exe is signed. Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org). [Code signing policy]($policy)"
+          } else {
+            $footer = "DupFinder.exe is not code signed, so Windows SmartScreen may warn. [Code signing policy]($policy)"
+          }
+          [IO.File]::WriteAllText("$PWD/release-notes.md", $notes.TrimEnd() + "`n`n---`n`n$footer`n", [Text.UTF8Encoding]::new($false))
+
+          Write-Host "Publishing $tag with DupFinder.exe ($((Get-Item DupFinder.exe).Length) bytes)."
+          # A rerun (a corrected workflow, a retried build) refreshes the
+          # release that is there instead of failing on the second attempt.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists - refreshing its notes and asset."
+            gh release edit $tag --title $title --notes-file release-notes.md --draft=false
+            gh release upload $tag DupFinder.exe --clobber
+          } else {
+            gh release create $tag DupFinder.exe --title $title --notes-file release-notes.md
+          }

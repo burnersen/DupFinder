@@ -1,0 +1,42 @@
+# DupFinder (https://github.com/burnersen/DupFinder)
+# Copyright (C) 2026 burnersen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Checks every push and pull request on Windows, where DupFinder runs:
+# gofmt, go vet and a build. Nothing is published here.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      # gofmt -l only lists offenders; turning its output into the verdict
+      # is the point of this step.
+      - name: gofmt
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            Write-Host "::error::These files are not gofmt-clean:"
+            $unformatted | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build -o DupFinder.exe .
