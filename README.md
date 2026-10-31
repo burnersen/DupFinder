@@ -101,7 +101,7 @@ DupFinder runs fine with no configuration. For large libraries you can tweak:
 
 ## 🛡️ Windows SmartScreen / antivirus warnings
 
-Windows or your antivirus may warn you the first time you run `DupFinder.exe`. The honest reason: **the EXE is not code-signed yet** (signing certificates cost hundreds of euros per year, and this is a free hobby project). Free code signing through the [SignPath Foundation](https://signpath.org) is applied for and already prepared; see the [code signing policy](CODE_SIGNING.md). Until then, unsigned Go binaries are common false-positive targets.
+Windows or your antivirus may warn you the first time you run `DupFinder.exe`. The honest reason: **the EXE is not code-signed yet** (signing certificates cost hundreds of euros per year, and this is a free hobby project). Free code signing through the [SignPath Foundation](https://signpath.org) is planned and already prepared, as soon as DupFinder is known well enough to qualify; see the [code signing policy](CODE_SIGNING.md). Until then, unsigned Go binaries are common false-positive targets.
 
 Every release is built by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), never on a private PC.
 
