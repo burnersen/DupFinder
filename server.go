@@ -29,6 +29,17 @@ func newServer(state *appState, cacheFile, ignoreFile string) *server {
 }
 
 func (s *server) run(port int) error {
+	s.httpSrv = &http.Server{
+		Addr:         fmt.Sprintf("localhost:%d", port),
+		Handler:      s.routes(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+	}
+	return s.httpSrv.ListenAndServe()
+}
+
+// routes is the whole HTTP API; tests call it without a listening server.
+func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 
 	webFS, _ := fs.Sub(webAssets, "web")
@@ -45,14 +56,7 @@ func (s *server) run(port int) error {
 	mux.HandleFunc("/api/shutdown", s.handleShutdown)
 	mux.HandleFunc("/api/play", s.handlePlay)
 	mux.HandleFunc("/api/reveal", s.handleReveal)
-
-	s.httpSrv = &http.Server{
-		Addr:         fmt.Sprintf("localhost:%d", port),
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-	}
-	return s.httpSrv.ListenAndServe()
+	return mux
 }
 
 // ============================================================================

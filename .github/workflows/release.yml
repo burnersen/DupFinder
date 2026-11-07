@@ -58,19 +58,18 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The annotated tag message can be the release text, and it only
           # exists in a clone that carries the tag objects.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          # Not go-version-file: "go 1.22" in go.mod is the oldest Go the
-          # sources compile with, not the one a release should ship. This
-          # program downloads FFmpeg over HTTPS, so a Go with current
-          # security fixes matters.
-          go-version: 'stable'
+          # The go line in go.mod is the version releases are built with,
+          # kept current (dev-starterkit werkzeuge/versionen.env): DupFinder
+          # downloads FFmpeg over HTTPS, so current security fixes matter.
+          go-version-file: go.mod
           cache: false
 
       # Started by hand: an existing tag is built exactly as tagged. A new
