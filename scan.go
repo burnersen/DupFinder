@@ -207,59 +207,6 @@ func pathHash(p string) string {
 }
 
 // ============================================================================
-// Binaries
-// ============================================================================
-
-type binaryPaths struct {
-	ffprobe string // dauerhafter Pfad zu ffprobe.exe (im bin-Ordner neben der EXE)
-	ffmpeg  string // dauerhafter Pfad zu ffmpeg.exe
-	tempDir string // kurzlebiger Scratch-Ordner für Hash-Bilder, via cleanup gelöscht
-}
-
-// ensureBinaries stellt sicher, dass ffmpeg.exe und ffprobe.exe verfügbar sind.
-// Gesucht wird AUSSCHLIESSLICH in binDir (Unterordner "bin" neben der EXE). Fehlt
-// eine der beiden Dateien, werden beide aus dem offiziellen BtbN-Build geladen
-// (siehe download.go) — aus Lizenzgründen werden sie NICHT mit dem Programm
-// ausgeliefert. Zusätzlich wird ein kurzlebiger Scratch-Ordner für die beim
-// Hashen anfallenden Zwischenbilder angelegt (beim Beenden via cleanup gelöscht).
-func ensureBinaries(binDir string) (*binaryPaths, error) {
-	ffmpegPath := filepath.Join(binDir, "ffmpeg.exe")
-	ffprobePath := filepath.Join(binDir, "ffprobe.exe")
-
-	if fileExists(ffmpegPath) && fileExists(ffprobePath) {
-		fmt.Println("FFmpeg/FFprobe gefunden.")
-	} else {
-		fmt.Println("FFmpeg/FFprobe fehlt – lade die offizielle Version (einmalig)…")
-		if err := downloadFFmpeg(binDir); err != nil {
-			return nil, fmt.Errorf("FFmpeg-Download fehlgeschlagen: %w\n"+
-				"Tipp: ffmpeg.exe und ffprobe.exe von https://github.com/BtbN/FFmpeg-Builds "+
-				"manuell in den Ordner %q legen.", err, binDir)
-		}
-		if !fileExists(ffmpegPath) || !fileExists(ffprobePath) {
-			return nil, fmt.Errorf("ffmpeg.exe/ffprobe.exe fehlen weiterhin nach dem Download")
-		}
-	}
-
-	tempDir, err := os.MkdirTemp("", "dupfinder-scratch-*")
-	if err != nil {
-		return nil, err
-	}
-	return &binaryPaths{ffprobe: ffprobePath, ffmpeg: ffmpegPath, tempDir: tempDir}, nil
-}
-
-// fileExists meldet, ob p eine vorhandene, nicht leere Datei ist (kein Ordner).
-func fileExists(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir() && info.Size() > 0
-}
-
-func (bp *binaryPaths) cleanup() {
-	if bp != nil && bp.tempDir != "" {
-		_ = os.RemoveAll(bp.tempDir)
-	}
-}
-
-// ============================================================================
 // Discovery
 // ============================================================================
 
@@ -1367,7 +1314,7 @@ func bulkExtractHashes(ffmpegPath, videoPath string, durSec float64,
 		"-i", videoPath,
 		"-an", "-sn", "-dn",
 		"-vf", fmt.Sprintf("select='%s',scale=32:32:flags=area,format=gray", selectExpr),
-		"-vsync", "0",
+		"-fps_mode", "passthrough", // was -vsync 0: no longer in the FFmpeg 9.0 manual, -fps_mode exists since 5.1
 		"-frames:v", fmt.Sprintf("%d", sampleCount),
 		"-f", "image2",
 		"-start_number", "1",
@@ -1646,7 +1593,7 @@ func bulkExtractThumbs(ffmpegPath, videoPath string, durSec float64,
 		"-i", videoPath,
 		"-an", "-sn", "-dn",
 		"-vf", vfilter,
-		"-vsync", "0",
+		"-fps_mode", "passthrough", // was -vsync 0: no longer in the FFmpeg 9.0 manual, -fps_mode exists since 5.1
 		"-frames:v", fmt.Sprintf("%d", len(thumbIndices)),
 		"-q:v", "5",
 		"-f", "image2",

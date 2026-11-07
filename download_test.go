@@ -6,8 +6,15 @@ package main
 
 import (
 	"archive/zip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +74,73 @@ func TestExtractFailsWhenAProgramIsMissing(t *testing.T) {
 	makeZip(t, zipPath, map[string]string{"root/bin/ffmpeg.exe": "ffmpeg"})
 	if err := extractFFmpegBinaries(zipPath, dir); err == nil {
 		t.Fatal("expected an error with ffprobe.exe missing")
+	}
+}
+
+func TestRuntimeJSONPinsFFmpeg(t *testing.T) {
+	rt, err := loadRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := rt.FFmpeg
+	if !strings.HasPrefix(f.URLs[0], "https://github.com/burnersen/DupFinder/releases/download/runtime-v1/") {
+		t.Errorf("first source must be the own mirror, got %s", f.URLs[0])
+	}
+	if len(f.URLs) < 2 || !strings.HasPrefix(f.URLs[1], "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-") {
+		t.Errorf("second source must be a dated BtbN build, never latest: %v", f.URLs)
+	}
+	if f.License == "" || f.Source == "" || f.Build == "" {
+		t.Error("license, source and build must be named (GPL: the mirror links the source)")
+	}
+}
+
+func pinnedServer(t *testing.T, body []byte) (*httptest.Server, runtimeEntry) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/good/f.zip" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	sum := sha256.Sum256(body)
+	return srv, runtimeEntry{Name: "Test", File: "f.zip", Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}
+}
+
+func TestDownloadTriesTheNextSource(t *testing.T) {
+	body := []byte("the pinned file")
+	srv, e := pinnedServer(t, body)
+	e.URLs = []string{srv.URL + "/missing/f.zip", srv.URL + "/good/f.zip"}
+	dest := filepath.Join(t.TempDir(), "f.zip")
+	var shown int64
+	if err := fetchPinned(context.Background(), srv.Client(), e, dest, func(done, total int64) { shown = done }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != string(body) || shown != int64(len(body)) {
+		t.Fatalf("got %q, progress %d", got, shown)
+	}
+}
+
+func TestDownloadRejectsAnyOtherFile(t *testing.T) {
+	srv, e := pinnedServer(t, []byte("the pinned file"))
+	for name, change := range map[string]func(*runtimeEntry){
+		"other checksum": func(e *runtimeEntry) { e.SHA256 = strings.Repeat("0", 64) },
+		"larger file":    func(e *runtimeEntry) { e.Size-- },
+		"smaller file":   func(e *runtimeEntry) { e.Size++ },
+		"not found":      func(e *runtimeEntry) { e.URLs = []string{srv.URL + "/missing/f.zip"} },
+	} {
+		e := e
+		e.URLs = []string{srv.URL + "/good/f.zip"}
+		change(&e)
+		dir := t.TempDir()
+		err := fetchPinned(context.Background(), srv.Client(), e, filepath.Join(dir, "f.zip"), nil)
+		var ue *UserError
+		if !errors.As(err, &ue) || ue.Hint == "" {
+			t.Errorf("%s: got %v, want a UserError with a hint", name, err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("%s: left %d file(s) behind", name, len(entries))
+		}
 	}
 }

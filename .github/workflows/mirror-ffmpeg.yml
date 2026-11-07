@@ -1,0 +1,88 @@
+# DupFinder (https://github.com/burnersen/DupFinder)
+# Copyright (C) 2026 burnersen
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Copies the FFmpeg build pinned in runtime.json into DupFinder's own
+# release "runtime-v1", so the download keeps working when BtbN removes old
+# builds (dev-starterkit 08-sicherheit.md S4).
+#
+# Every run fetches the build from BtbN, checks size and SHA-256 against
+# runtime.json and runs DupFinder's live tests with it (real frames, real
+# duplicates). Only "Run workflow" by hand publishes; a pull request that
+# changes runtime.json or this file gets the same checks without publishing.
+#
+# runtime-v1 is a pre-release that is never marked "latest", so
+# releases/latest/download/DupFinder.exe keeps pointing at DupFinder.
+name: Mirror FFmpeg
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'runtime.json'
+      - '.github/workflows/mirror-ffmpeg.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Fetch the pinned build and check it
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue' # the progress bar slows the download down a lot
+          $f = (Get-Content runtime.json -Raw | ConvertFrom-Json).ffmpeg
+          $upstream = $f.urls | Where-Object { $_ -like 'https://github.com/BtbN/*' } | Select-Object -First 1
+          if (-not $upstream) { Write-Host '::error::runtime.json has no BtbN source'; exit 1 }
+          Invoke-WebRequest -Uri $upstream -OutFile $f.file
+          $size = (Get-Item $f.file).Length
+          $hash = (Get-FileHash $f.file -Algorithm SHA256).Hash.ToLower()
+          if ($size -ne $f.size -or $hash -ne $f.sha256) {
+            Write-Host "::error::$($f.file): $size bytes, SHA-256 $hash; runtime.json pins $($f.size) bytes, $($f.sha256)"
+            exit 1
+          }
+          Write-Host "$($f.file): $size bytes, SHA-256 matches runtime.json."
+          Expand-Archive $f.file -DestinationPath ffunpacked
+          $bin = (Get-ChildItem ffunpacked -Directory | Select-Object -First 1).FullName + '\bin'
+          & "$bin\ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+          "DUPFINDER_TEST_FFMPEG=$bin" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "FFMPEG_FILE=$($f.file)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: DupFinder works with this FFmpeg
+        run: go test -count=1 -run Live -v ./...
+
+      - name: Publish to the release runtime-v1
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $f = (Get-Content runtime.json -Raw | ConvertFrom-Json).ffmpeg
+          $mirror = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/runtime-v1/$env:FFMPEG_FILE"
+          if ($f.urls -notcontains $mirror) { Write-Host "::error::runtime.json does not list $mirror"; exit 1 }
+          # FFmpeg is GPL: whoever passes on the binaries names their source.
+          $notes = @"
+          Files DupFinder downloads on first start. Not a DupFinder release: get DupFinder from the latest release.
+
+          **$($f.name)**, Windows x64 build by BtbN, unchanged copy.
+          License: $($f.license) (LICENSE.txt in the archive). Source: [FFmpeg]($($f.source)), [build scripts and the sources of all included libraries]($($f.build)).
+
+          DupFinder checks size ($($f.size) bytes) and SHA-256 ($($f.sha256)) before it unpacks anything.
+          "@
+          [IO.File]::WriteAllText("$PWD/runtime-notes.md", $notes, [Text.UTF8Encoding]::new($false))
+          gh release view runtime-v1 *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create runtime-v1 --prerelease --latest=false --target $env:GITHUB_SHA --title 'Runtime files (FFmpeg)' --notes-file runtime-notes.md
+          } else {
+            gh release edit runtime-v1 --prerelease --latest=false --notes-file runtime-notes.md
+          }
+          gh release upload runtime-v1 $env:FFMPEG_FILE --clobber
+          Write-Host "Mirrored to $mirror"
