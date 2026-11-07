@@ -4,7 +4,7 @@
   Copyright (C) 2026 burnersen
   SPDX-License-Identifier: GPL-3.0-only
 -->
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>DupFinder</title>
@@ -15,51 +15,51 @@
 <header class="topbar">
   <div class="brand">DupFinder</div>
   <div class="stats" id="stats">
-    <span class="stat"><span class="stat-label">Offen</span> <span class="stat-val" id="pendingCount">–</span></span>
-    <span class="stat"><span class="stat-label">Erledigt</span> <span class="stat-val" id="decidedCount">–</span></span>
-    <span class="stat"><span class="stat-label">Ignoriert</span> <span class="stat-val" id="ignoredCount">–</span></span>
-    <span class="stat highlight"><span class="stat-label">Sparpotenzial</span> <span class="stat-val" id="totalSavings">–</span></span>
-    <span class="stat hidden" id="readErrorsStat" title="Dateien, die nicht gelesen werden konnten (defekt/gesperrt)"><span class="stat-label">⚠ Nicht lesbar</span> <span class="stat-val" id="readErrors">0</span></span>
+    <span class="stat"><span class="stat-label">Open</span> <span class="stat-val" id="pendingCount">-</span></span>
+    <span class="stat"><span class="stat-label">Done</span> <span class="stat-val" id="decidedCount">-</span></span>
+    <span class="stat"><span class="stat-label">Ignored</span> <span class="stat-val" id="ignoredCount">-</span></span>
+    <span class="stat highlight"><span class="stat-label">Can free</span> <span class="stat-val" id="totalSavings">-</span></span>
+    <span class="stat hidden" id="readErrorsStat" title="Files that could not be read (broken or locked)"><span class="stat-label">⚠ Unreadable</span> <span class="stat-val" id="readErrors">0</span></span>
   </div>
   <div class="actions">
-    <button id="btnRescan" title="Neu scannen">↻ Rescan</button>
-    <button id="btnAddRoot" title="Verzeichnis hinzufügen">+ Pfad</button>
-    <button id="btnHelp" title="Hilfe">?</button>
-    <button id="btnShutdown" class="danger" title="Programm beenden">⏻ Beenden</button>
+    <button id="btnRescan" title="Scan again">↻ Rescan</button>
+    <button id="btnAddRoot" title="Add a folder">+ Folder</button>
+    <button id="btnHelp" title="Help">?</button>
+    <button id="btnShutdown" class="danger" title="End DupFinder">⏻ Quit</button>
   </div>
 </header>
 
 <div id="progress" class="progress hidden">
-  <div class="progress-text" id="progressText">Bereit</div>
+  <div class="progress-text" id="progressText">Ready</div>
   <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
 </div>
 
 <div id="rootsBar" class="roots-bar"></div>
 
 <div id="helpPanel" class="help-panel hidden">
-  <h3>Tastenkürzel</h3>
+  <h3>Keyboard shortcuts</h3>
   <table>
-    <tr><td><kbd>1</kbd>…<kbd>9</kbd></td><td>Aktion auf Video N umschalten (Behalten ↔ Löschen)</td></tr>
-    <tr><td><kbd>Shift</kbd>+<kbd>1…9</kbd></td><td>Video N als <em>Ignorieren</em> markieren</td></tr>
-    <tr><td><kbd>Enter</kbd></td><td>Cluster bestätigen (Aktionen ausführen)</td></tr>
-    <tr><td><kbd>S</kbd></td><td>Cluster überspringen (alles behalten)</td></tr>
-    <tr><td><kbd>U</kbd></td><td>Letzte Entscheidung rückgängig</td></tr>
-    <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Zwischen Clustern springen</td></tr>
-    <tr><td><kbd>?</kbd></td><td>Diese Hilfe ein/ausblenden</td></tr>
+    <tr><td><kbd>1</kbd>…<kbd>9</kbd></td><td>Toggle video N between Keep and Delete</td></tr>
+    <tr><td><kbd>Shift</kbd>+<kbd>1…9</kbd></td><td>Mark video N as <em>Ignore</em></td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Confirm the group (carry out the actions)</td></tr>
+    <tr><td><kbd>S</kbd></td><td>Skip the group (keep everything)</td></tr>
+    <tr><td><kbd>U</kbd></td><td>Undo the last decision</td></tr>
+    <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move between groups</td></tr>
+    <tr><td><kbd>?</kbd></td><td>Show or hide this help</td></tr>
   </table>
-  <h3>Aktionen</h3>
+  <h3>Actions</h3>
   <ul>
-    <li><strong>Behalten</strong>: Datei bleibt erhalten.</li>
-    <li><strong>Löschen</strong>: Datei wandert in den <em>Windows-Papierkorb</em> (kann von dort wiederhergestellt werden).</li>
-    <li><strong>Ignorieren</strong>: Datei wird beim nächsten Scan nicht mehr in Cluster einbezogen, bleibt aber an ihrem Ort.</li>
+    <li><strong>Keep</strong>: the file stays.</li>
+    <li><strong>Delete</strong>: the file goes to the <em>Windows recycle bin</em> (you can restore it from there).</li>
+    <li><strong>Ignore</strong>: the file stays where it is and is left out of groups from the next scan on.</li>
   </ul>
-  <p class="muted">Standardvorschlag: die größte Datei pro Cluster wird als „Behalten" markiert, alle kleineren als „Löschen". Du kannst das jederzeit ändern.</p>
+  <p class="muted">Suggested by default: the largest file of each group is marked "Keep", all smaller ones "Delete". You can change that at any time.</p>
 </div>
 
 <main id="clustersContainer">
   <div class="empty-state" id="emptyState">
-    <h2>Lade…</h2>
-    <p>Der Scan läuft im Hintergrund. Sobald Cluster gefunden werden, erscheinen sie hier.</p>
+    <h2>Loading...</h2>
+    <p>The scan runs in the background. Groups of duplicates show up here as soon as they are found.</p>
   </div>
 </main>
 
@@ -67,13 +67,13 @@
 
 <dialog id="addRootDialog">
   <form method="dialog">
-    <h3>Pfad hinzufügen</h3>
-    <p class="muted">Vollständigen Pfad zu einem Verzeichnis eingeben (z.B. <code>D:\Filme</code>).</p>
+    <h3>Add a folder</h3>
+    <p class="muted">Enter the full path of a folder (e.g. <code>D:\Movies</code>).</p>
     <input type="text" id="addRootInput" placeholder="C:\..." style="width:100%">
-    <p class="muted">Nach dem Hinzufügen wird automatisch ein Rescan ausgelöst.</p>
+    <p class="muted">A rescan starts by itself after adding it.</p>
     <div class="dialog-buttons">
-      <button value="cancel">Abbrechen</button>
-      <button value="ok" id="addRootOk">Hinzufügen</button>
+      <button value="cancel">Cancel</button>
+      <button value="ok" id="addRootOk">Add</button>
     </div>
   </form>
 </dialog>

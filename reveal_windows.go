@@ -19,28 +19,28 @@ import (
 )
 
 // ============================================================================
-// "Ordner öffnen" – Datei im Explorer markieren und das Fenster nach vorne holen
+// "Show in folder": select the file in Explorer and bring the window to the front
 //
-// Primärweg: SHOpenFolderAndSelectItems (Shell-API). Das ist derselbe Weg, den
-// der Explorer intern für "/select" nutzt – er markiert die Datei zuverlässig
-// und scrollt sie ins Bild.
+// Main way: SHOpenFolderAndSelectItems (shell API), the same way Explorer
+// uses internally for "/select": it selects the file reliably and scrolls
+// it into view.
 //
-// Vordergrund: Windows erlaubt einem Hintergrund-Programm (hier: der lokale
-// Server, vom Browser angestoßen) normalerweise nicht, ein Fenster vor das
-// aktive zu schieben ("Fokus-Schutz"). Der zuverlässige Weg ist, das frisch
-// geöffnete Explorer-Fenster zu suchen und es mit dem AttachThreadInput-Trick
-// nach vorne zu zwingen: Man hängt die eigene Eingabe kurz an die des aktuell
-// aktiven Programms an – dadurch greift SetForegroundWindow wirklich durch – und
-// löst die Verbindung sofort wieder. Klappt in den allermeisten Fällen, ist aber
-// nicht zu 100 % garantiert (z. B. nicht gegen ein Vollbild-Programm im
-// Vordergrund). Es werden nur Fenster-Befehle genutzt – kein Risiko für Daten.
+// Foreground: Windows normally does not let a background program (here the
+// local server, triggered by the browser) push a window in front of the
+// active one ("focus protection"). The reliable way is to find the newly
+// opened Explorer window and force it to the front with the
+// AttachThreadInput trick: attach our own input to that of the active
+// program for a moment, so SetForegroundWindow really works, and detach
+// again at once. Works in nearly every case, but not guaranteed 100 %
+// (e.g. not against a full-screen program in front). Only window commands
+// are used: no risk for data.
 //
-// Fallback: das bewährte "explorer /select,". Greift, falls die Shell-API nicht
-// verfügbar ist oder fehlschlägt – analog zum Papierkorb-Code, der von
-// IFileOperation auf SHFileOperation zurückfällt.
+// Fallback: the proven "explorer /select,", used if the shell API is not
+// available or fails, like the recycle bin code falls back from
+// IFileOperation to SHFileOperation.
 //
-// COM-Initialisierung (procCoInitializeEx/procCoUninit, COINIT_*) und der
-// shell32-Handle stammen aus recycle_windows.go (gleiches package main).
+// COM initialisation (procCoInitializeEx/procCoUninit, COINIT_*) and the
+// shell32 handle come from recycle_windows.go (same package main).
 // ============================================================================
 
 var (
@@ -71,7 +71,7 @@ const (
 	swRestore        = 9
 )
 
-// revealInExplorer öffnet den Ordner der Datei und markiert sie darin.
+// revealInExplorer opens the folder of the file and selects it there.
 func revealInExplorer(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -83,10 +83,10 @@ func revealInExplorer(path string) error {
 	return revealViaExplorerSelect(absPath)
 }
 
-// revealViaShell ist der Primärweg über SHOpenFolderAndSelectItems.
+// revealViaShell is the main way, through SHOpenFolderAndSelectItems.
 func revealViaShell(absPath string) error {
-	// Falls die APIs auf diesem System nicht existieren: sauber scheitern,
-	// damit der Aufrufer auf den Fallback ausweicht (statt zu panicken).
+	// If the APIs do not exist on this system: fail cleanly, so the caller
+	// takes the fallback (instead of panicking).
 	if err := procILCreateFromPath.Find(); err != nil {
 		return err
 	}
@@ -94,13 +94,13 @@ func revealViaShell(absPath string) error {
 		return err
 	}
 
-	// COM braucht einen festen OS-Thread (Apartment-Modell).
+	// COM needs a fixed OS thread (apartment model).
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	hr, _, _ := procCoInitializeEx.Call(0, COINIT_APARTMENTTHREADED)
-	// S_OK(0)/S_FALSE(1) = ok. RPC_E_CHANGED_MODE = anderer Modus aktiv, dann
-	// KEIN CoUninitialize aufrufen.
+	// S_OK (0) and S_FALSE (1) are fine. RPC_E_CHANGED_MODE: another mode is
+	// active, then do NOT call CoUninitialize.
 	const rpcChangedMode = 0x80010106
 	if uint32(hr) != rpcChangedMode {
 		defer procCoUninit.Call()
@@ -110,32 +110,32 @@ func revealViaShell(absPath string) error {
 	if err != nil {
 		return err
 	}
-	// ILCreateFromPath liefert die vollständige Item-ID-Liste (PIDL) der Datei.
+	// ILCreateFromPath returns the full item ID list (PIDL) of the file.
 	pidl, _, _ := procILCreateFromPath.Call(uintptr(unsafe.Pointer(pathPtr)))
 	runtime.KeepAlive(pathPtr)
 	if pidl == 0 {
-		return fmt.Errorf("ILCreateFromPath lieferte NULL für %q", absPath)
+		return fmt.Errorf("ILCreateFromPath returned NULL for %q", absPath)
 	}
 	defer procILFree.Call(pidl)
 
-	// pidl ist der Pfad der DATEI; mit cidl=0 und apidl=NULL öffnet die Shell den
-	// Elternordner und markiert die Datei darin.
+	// pidl is the path of the FILE; with cidl=0 and apidl=NULL the shell opens
+	// the parent folder and selects the file in it.
 	hr, _, _ = procSHOpenFolderAndSelectItems.Call(pidl, 0, 0, 0)
 	if int32(hr) < 0 {
 		return fmt.Errorf("SHOpenFolderAndSelectItems hr=0x%x", uint32(hr))
 	}
 
-	// Fenster nach vorne holen – asynchron, damit die HTTP-Antwort nicht auf die
-	// kurze Fenstersuche wartet.
+	// Bring the window to the front asynchronously, so the HTTP answer does not
+	// wait for the short window search.
 	dir := filepath.Dir(absPath)
 	displayName := folderDisplayName(dir)
 	go bringFolderWindowToFront(displayName, dir)
 	return nil
 }
 
-// folderDisplayName liefert den Namen, den der Explorer im Fenstertitel anzeigt
-// (z. B. "Downloads" oder "Lokaler Datenträger (C:)"). Darüber finden wir das
-// richtige Fenster zuverlässiger als über den reinen Ordnernamen.
+// folderDisplayName returns the name Explorer shows in the window title
+// (e.g. "Downloads" or "Local Disk (C:)"). That finds the right window more
+// reliably than the bare folder name.
 func folderDisplayName(dir string) string {
 	pathPtr, err := syscall.UTF16PtrFromString(dir)
 	if err != nil {
@@ -164,13 +164,13 @@ type shFileInfoW struct {
 	szTypeName    [80]uint16
 }
 
-// Suchzustand für die Fenstersuche. EnumWindows ruft seinen Callback synchron im
-// selben Thread auf; wir schützen den Zustand per Mutex und reichen ihn NICHT
-// über lParam herein. So vermeiden wir eine uintptr→unsafe.Pointer-Wandlung (die
-// go vet zu Recht anmeckert) und teilen den Zustand trotzdem sicher.
+// State of the window search. EnumWindows calls its callback synchronously
+// in the same thread; the state is guarded by a mutex and NOT passed in
+// through lParam. That avoids a uintptr to unsafe.Pointer conversion (which
+// go vet rightly complains about) and still shares the state safely.
 type findWindowCtx struct {
-	wantDisplay string // Anzeigename des Ordners (Fenstertitel-Standard)
-	wantDir     string // voller Pfad (falls "vollständigen Pfad im Titel" aktiv)
+	wantDisplay string // display name of the folder (default window title)
+	wantDir     string // full path (if "show the full path in the title" is on)
 	found       uintptr
 }
 
@@ -179,8 +179,8 @@ var (
 	enumSearch   findWindowCtx
 )
 
-// enumWindowsCallback sucht ein sichtbares Explorer-Fenster, dessen Titel zum
-// gesuchten Ordner passt. Rückgabe 1 = weitersuchen, 0 = gefunden/stoppen.
+// enumWindowsCallback looks for a visible Explorer window whose title fits
+// the folder. Returns 1 = go on searching, 0 = found, stop.
 var enumWindowsCallback = syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
 	if r, _, _ := procIsWindowVisible.Call(hwnd); r == 0 {
 		return 1
@@ -197,18 +197,18 @@ var enumWindowsCallback = syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
 	return 1
 })
 
-// getWindowText liest Klassennamen oder Fenstertitel (gleiche Aufrufform für
-// GetClassNameW und GetWindowTextW).
+// getWindowText reads the class name or the window title (GetClassNameW
+// and GetWindowTextW are called the same way).
 func getWindowText(hwnd uintptr, proc *syscall.LazyProc) string {
 	var buf [512]uint16
 	n, _, _ := proc.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// bringFolderWindowToFront sucht das passende Explorer-Fenster (kurzes Pollen,
-// weil ein frisch geöffnetes Fenster einen Moment braucht) und zwingt es nach
-// vorne. Findet es nichts, passiert nichts Schlimmes – das Fenster ist trotzdem
-// offen, nur evtl. im Hintergrund.
+// bringFolderWindowToFront looks for the right Explorer window (polls
+// briefly, a newly opened window needs a moment) and forces it to the
+// front. If it finds nothing, nothing bad happens: the window is open
+// anyway, perhaps behind others.
 func bringFolderWindowToFront(displayName, dir string) {
 	if displayName == "" {
 		displayName = filepath.Base(dir)
@@ -229,8 +229,8 @@ func bringFolderWindowToFront(displayName, dir string) {
 	}
 }
 
-// findExplorerWindow durchsucht alle Top-Level-Fenster synchron nach einem
-// passenden Explorer-Fenster und liefert dessen Handle (0 = nicht gefunden).
+// findExplorerWindow searches all top-level windows synchronously for a
+// fitting Explorer window and returns its handle (0 = not found).
 func findExplorerWindow(displayName, dir string) uintptr {
 	enumSearchMu.Lock()
 	defer enumSearchMu.Unlock()
@@ -239,8 +239,8 @@ func findExplorerWindow(displayName, dir string) uintptr {
 	return enumSearch.found
 }
 
-// forceForeground holt hwnd nach vorne. Trick: kurz die eigene Eingabe an die des
-// aktuell aktiven Programms anhängen, damit SetForegroundWindow durchgreift.
+// forceForeground brings hwnd to the front. Trick: attach our own input to
+// that of the active program for a moment, so SetForegroundWindow works.
 func forceForeground(hwnd uintptr) {
 	fg, _, _ := procGetForegroundWindow.Call()
 	if fg == hwnd {
@@ -271,14 +271,14 @@ func forceForeground(hwnd uintptr) {
 	}
 }
 
-// revealViaExplorerSelect ist der Fallback über "explorer /select,".
+// revealViaExplorerSelect is the fallback through "explorer /select,".
 //
-// Die Kommandozeile wird von Hand gebaut: Der Explorer erkennt /select nur, wenn
-// die Anführungszeichen NUR um den Pfad stehen (explorer /select,"C:\..."). Bei
-// normaler Argumentübergabe würde Go bei Pfaden mit Leerzeichen das ganze Token
-// einklammern und der Schalter würde ignoriert. Ein " ist unter Windows ein
-// verbotenes Pfadzeichen, daher ist das Einbetten in "..." sicher; der Pfad ist
-// zudem vom Aufrufer über pathIsKnown geprüft.
+// The command line is built by hand: Explorer recognises /select only when
+// the quotes are ONLY around the path (explorer /select,"C:\..."). With
+// normal argument passing Go would quote the whole token for paths with
+// spaces and the switch would be ignored. A " is not allowed in Windows
+// paths, so embedding it in "..." is safe; the caller has checked the path
+// with pathIsKnown as well.
 func revealViaExplorerSelect(path string) error {
 	cmd := exec.Command("explorer")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -287,8 +287,8 @@ func revealViaExplorerSelect(path string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// Reaper-Goroutine: vermeidet Zombie-Prozesse. explorer.exe liefert oft
-	// Exit-Code 1 selbst bei Erfolg – der Wait-Fehler wird bewusst ignoriert.
-	go func() { _ = cmd.Wait() }()
+	// Reaper goroutine: avoids zombie processes. explorer.exe often returns
+	// exit code 1 even on success: the Wait error is ignored on purpose.
+	go func() { _ = cmd.Wait() }() // ignore: see the comment above
 	return nil
 }

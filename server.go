@@ -168,7 +168,7 @@ func (s *server) handleProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-// /api/events  – Server-Sent Events (Push statt Polling)
+// /api/events: Server-Sent Events (push instead of polling)
 // ============================================================================
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -178,8 +178,8 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	rc := http.NewResponseController(w)
-	// WriteTimeout des Servers (60s) für DIESE Langläufer-Verbindung aufheben,
-	// sonst würde der Stream nach 60s abreißen.
+	// Lift the server's WriteTimeout (60 s) for THIS long-running connection,
+	// or the stream would break off after 60 s.
 	_ = rc.SetWriteDeadline(time.Time{}) // ignore: not every writer supports it; the stream works without
 
 	write := func(event, data string) bool {
@@ -223,7 +223,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done(): // Client getrennt
 			return
-		case <-appCtx.Done(): // Shutdown – blockiert httpSrv.Shutdown nicht
+		case <-appCtx.Done(): // shutdown: does not block httpSrv.Shutdown
 			return
 		case <-ticker.C:
 		case <-heartbeat.C:
@@ -272,7 +272,7 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 	s.state.mu.Unlock()
 
 	if cl == nil {
-		http.Error(w, "Cluster nicht gefunden", http.StatusNotFound)
+		http.Error(w, "Group not found", http.StatusNotFound)
 		return
 	}
 	// Checked before anything happens: a decision may only name files of
@@ -376,7 +376,7 @@ func (s *server) handleUndo(w http.ResponseWriter, r *http.Request) {
 			s.state.bumpVersion()
 			resp := map[string]any{
 				"ok":   true,
-				"note": "Bereits gelöschte Dateien liegen im Windows-Papierkorb.",
+				"note": "Files deleted already are in the Windows recycle bin.",
 			}
 			if len(problems) > 0 {
 				resp["errors"] = problems
@@ -385,7 +385,7 @@ func (s *server) handleUndo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Error(w, "Cluster nicht gefunden", http.StatusNotFound)
+	http.Error(w, "Group not found", http.StatusNotFound)
 }
 
 // ============================================================================
@@ -409,12 +409,12 @@ func (s *server) handleAddRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No folder given", http.StatusBadRequest)
 		return
 	}
 	st, err := os.Stat(req.Path)
 	if err != nil || !st.IsDir() {
-		http.Error(w, "Verzeichnis nicht gefunden", http.StatusBadRequest)
+		http.Error(w, "Folder not found", http.StatusBadRequest)
 		return
 	}
 
@@ -441,7 +441,7 @@ func (s *server) handleRescan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.state.scanning.Load() {
-		http.Error(w, "Scan läuft bereits", http.StatusConflict)
+		http.Error(w, "A scan is running already", http.StatusConflict)
 		return
 	}
 	go func() {
@@ -514,14 +514,14 @@ func (s *server) scanFailed(err error) {
 // /api/play, /api/reveal
 // ============================================================================
 
-// requireJSON erzwingt Content-Type: application/json bei mutierenden Requests.
-// Schutz gegen CSRF: Eine fremde Website kann per HTML-Formular nur "simple"
-// Content-Types (text/plain, form-urlencoded) ohne CORS-Preflight senden.
-// Durch das Verlangen von application/json wird ein Preflight erzwungen, den
-// der Browser für cross-origin Requests blockiert. Liefert true, wenn ok.
+// requireJSON insists on Content-Type: application/json for changing requests.
+// Against CSRF: a foreign web page can send only "simple" content types
+// (text/plain, form-urlencoded) with an HTML form, without a CORS preflight.
+// Requiring application/json forces a preflight, which the browser blocks
+// for cross-origin requests. Returns true if all is well.
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
-	// Optionale Parameter wie "; charset=utf-8" zulassen.
+	// Allow parameters such as "; charset=utf-8".
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = ct[:i]
 	}
@@ -532,9 +532,9 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// pathIsKnown prüft, ob der angegebene Pfad zu einem Video gehört, das aktuell
-// im State bekannt ist. Damit verhindern wir Command-Injection / das Öffnen
-// beliebiger Pfade über das HTTP-API.
+// pathIsKnown checks that the path belongs to a video in the current state.
+// This keeps the HTTP API from opening arbitrary paths or being used for
+// command injection.
 func (s *server) pathIsKnown(p string) bool {
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
@@ -565,28 +565,28 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No file given", http.StatusBadRequest)
 		return
 	}
 	if !s.pathIsKnown(req.Path) {
-		http.Error(w, "Pfad nicht im aktuellen State", http.StatusForbidden)
+		http.Error(w, "File is not part of the current result", http.StatusForbidden)
 		return
 	}
 	if _, err := os.Stat(req.Path); err != nil {
-		http.Error(w, "Datei nicht gefunden", http.StatusNotFound)
+		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Kein cmd.exe: rundll32 FileProtocolHandler öffnet die Datei mit dem im
-	// Windows-Default registrierten Programm und umgeht das fehleranfällige
-	// cmd-Argument-Parsing (Zeichen wie & oder " können dort missinterpretiert
-	// werden). Pfad ist bereits über pathIsKnown abgesichert.
+	// No cmd.exe: rundll32 FileProtocolHandler opens the file with the program
+	// registered in Windows and avoids cmd's error-prone argument parsing
+	// (characters such as & or " can be misread there). The path is checked
+	// by pathIsKnown already.
 	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", req.Path)
 	if err := cmd.Start(); err != nil {
-		http.Error(w, "Konnte Player nicht starten: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Could not start the player: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Reaper-Goroutine: vermeidet Zombie-Prozesse und gibt Handles frei.
+	// Reaper goroutine: avoids zombie processes and frees handles.
 	go func() { _ = cmd.Wait() }() // ignore: only reaps the process; the player's exit code means nothing here
 
 	writeJSON(w, map[string]any{"ok": true})
@@ -609,23 +609,23 @@ func (s *server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No file given", http.StatusBadRequest)
 		return
 	}
 	if !s.pathIsKnown(req.Path) {
-		http.Error(w, "Pfad nicht im aktuellen State", http.StatusForbidden)
+		http.Error(w, "File is not part of the current result", http.StatusForbidden)
 		return
 	}
 	if _, err := os.Stat(req.Path); err != nil {
-		http.Error(w, "Datei nicht gefunden", http.StatusNotFound)
+		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Öffnet den enthaltenden Ordner und markiert die Datei. Die plattform-
-	// spezifische Umsetzung (inkl. korrekter Anführungszeichen für /select)
-	// steckt in reveal_windows.go bzw. reveal_other.go.
+	// Opens the containing folder and selects the file. The platform
+	// specific part (including the right quoting for /select) is in
+	// reveal_windows.go and reveal_other.go.
 	if err := revealInExplorer(req.Path); err != nil {
-		http.Error(w, "Konnte Explorer nicht starten: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Could not start Explorer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

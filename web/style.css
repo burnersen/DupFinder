@@ -285,7 +285,7 @@ button.primary:hover {
   padding: 10px;
 }
 
-/* Video Cards: horizontal nebeneinander */
+/* Video cards: side by side */
 .videos-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 380px));
@@ -388,8 +388,8 @@ button.primary:hover {
 }
 
 /* ====================================================================== */
-/* Video-Tools (Abspielen / Ordner öffnen)                                */
-/* Sitzt zwischen .video-meta und .video-actions.                          */
+/* Video tools (play / show in folder)                                    */
+/* Sits between .video-meta and .video-actions.                          */
 /* ====================================================================== */
 
 .video-tools {
@@ -476,7 +476,7 @@ button.primary:hover {
 .cluster.decided .decided-summary { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 
 /* ====================================================================== */
-/* Decided Drawer (Schublade für entschiedene Cluster)                    */
+/* Decided drawer (for groups decided already)                           */
 /* ====================================================================== */
 
 .decided-drawer {
@@ -499,7 +499,7 @@ button.primary:hover {
   list-style: none;
 }
 
-/* Standard-Marker des <summary> ausblenden, eigenes Pfeil-Icon davor */
+/* Hide the default marker of <summary>, own arrow icon in front */
 .decided-drawer-summary::-webkit-details-marker { display: none; }
 .decided-drawer-summary::marker { display: none; content: ''; }
 
@@ -545,7 +545,7 @@ button.primary:hover {
   gap: 10px;
 }
 
-/* Cluster in der Schublade: Rahmen weglassen, sind ja schon im Drawer-Rahmen */
+/* Groups in the drawer: no border, the drawer has one already */
 .decided-drawer-body .cluster {
   background: var(--bg-card);
 }

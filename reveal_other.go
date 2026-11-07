@@ -9,5 +9,5 @@ package main
 import "fmt"
 
 func revealInExplorer(path string) error {
-	return fmt.Errorf("Ordner im Explorer öffnen nur auf Windows verfügbar")
+	return fmt.Errorf("showing a file in Explorer is only available on Windows")
 }

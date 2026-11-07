@@ -24,7 +24,7 @@ function formatBytes(b) {
 }
 
 function formatDuration(s) {
-  if (!s || !isFinite(s) || s <= 0) return '–';
+  if (!s || !isFinite(s) || s <= 0) return '-';
   s = Math.round(s);
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -44,9 +44,9 @@ function showToast(msg, type = 'info', timeout = 3000) {
 }
 
 async function api(path, opts = {}) {
-  // Bei mutierenden Requests immer application/json setzen – passend zum
-  // serverseitigen CSRF-Schutz (requireJSON). Erzwingt einen CORS-Preflight,
-  // den der Browser für fremde Websites blockiert.
+  // Changing requests always send application/json, matching the CSRF
+  // protection on the server (requireJSON). It forces a CORS preflight,
+  // which the browser blocks for foreign web pages.
   const method = (opts.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {
     opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
@@ -110,8 +110,8 @@ function getActionsForCluster(cluster) {
   return pendingActions[cluster.id];
 }
 
-// Helfer für /api/play und /api/reveal. Stoppt das Bubble-Up des Klicks,
-// damit nicht aus Versehen die Action-Buttons (keep/delete) getriggert werden.
+// Helper for /api/play and /api/reveal. Stops the click from bubbling up, so
+// it does not trigger the action buttons (keep/delete) by accident.
 async function callPathAction(endpoint, path, ev) {
   if (ev) {
     ev.preventDefault();
@@ -124,7 +124,7 @@ async function callPathAction(endpoint, path, ev) {
       body: JSON.stringify({ path }),
     });
   } catch (e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 }
 
@@ -141,8 +141,8 @@ function renderCluster(cluster, idx) {
   header.className = 'cluster-header';
   header.innerHTML = `
     <span class="cluster-id">#${cluster.id}</span>
-    <span class="cluster-meta">${cluster.videos.length} Dateien · gesamt ${formatBytes(cluster.totalSize)}</span>
-    <span class="cluster-savings">↓ ${formatBytes(cluster.savings)} sparbar</span>
+    <span class="cluster-meta">${cluster.videos.length} files · ${formatBytes(cluster.totalSize)} in total</span>
+    <span class="cluster-savings">↓ ${formatBytes(cluster.savings)} can be freed</span>
   `;
   div.appendChild(header);
 
@@ -152,8 +152,8 @@ function renderCluster(cluster, idx) {
     const counts = { keep: 0, delete: 0, ignore: 0 };
     cluster.decisions.forEach(d => counts[d.action] = (counts[d.action] || 0) + 1);
     sum.innerHTML = `
-      <span>✓ Entschieden: ${counts.keep || 0} behalten · ${counts.delete || 0} gelöscht · ${counts.ignore || 0} ignoriert</span>
-      <button class="btn-undo" data-cluster-id="${cluster.id}">↶ Rückgängig</button>
+      <span>✓ Decided: ${counts.keep || 0} kept · ${counts.delete || 0} deleted · ${counts.ignore || 0} ignored</span>
+      <button class="btn-undo" data-cluster-id="${cluster.id}">↶ Undo</button>
     `;
     div.appendChild(sum);
     return div;
@@ -203,11 +203,11 @@ function renderCluster(cluster, idx) {
     const grid = document.createElement('div');
     grid.className = 'meta-grid';
     const cells = [
-      ['Größe', formatBytes(v.size), false],
+      ['Size', formatBytes(v.size), false],
       ['Bitrate', `${v.bitrateKbps} kbps`, i === best.bitrate],
-      ['Auflösung', `${v.width}×${v.height}`, i === best.resolution],
-      ['Codec', v.codec || '–', i === best.codec],
-      ['Dauer', formatDuration(v.durationSec), false],
+      ['Resolution', `${v.width}×${v.height}`, i === best.resolution],
+      ['Codec', v.codec || '-', i === best.codec],
+      ['Duration', formatDuration(v.durationSec), false],
     ];
     cells.forEach(([k, val, isBest]) => {
       const kEl = document.createElement('span');
@@ -226,24 +226,24 @@ function renderCluster(cluster, idx) {
     meta.appendChild(path);
     card.appendChild(meta);
 
-    // ----- video-tools: Abspielen / Ordner öffnen -----
-    // Sitzt zwischen meta und video-actions.
+    // ----- video-tools: play / show in folder -----
+    // Sits between meta and video-actions.
     const tools = document.createElement('div');
     tools.className = 'video-tools';
 
     const btnPlay = document.createElement('button');
     btnPlay.className = 'btn-play';
     btnPlay.type = 'button';
-    btnPlay.textContent = '▶ Abspielen';
-    btnPlay.title = 'Mit dem Standard-Player öffnen';
+    btnPlay.textContent = '▶ Play';
+    btnPlay.title = 'Open with the default player';
     btnPlay.addEventListener('click', (ev) => callPathAction('/api/play', v.path, ev));
     tools.appendChild(btnPlay);
 
     const btnReveal = document.createElement('button');
     btnReveal.className = 'btn-reveal';
     btnReveal.type = 'button';
-    btnReveal.textContent = '📁 Ordner';
-    btnReveal.title = 'Im Explorer markieren';
+    btnReveal.textContent = '📁 Folder';
+    btnReveal.title = 'Show in Explorer';
     btnReveal.addEventListener('click', (ev) => callPathAction('/api/reveal', v.path, ev));
     tools.appendChild(btnReveal);
 
@@ -254,7 +254,7 @@ function renderCluster(cluster, idx) {
     act.className = 'video-actions';
     ['keep', 'delete', 'ignore'].forEach(a => {
       const b = document.createElement('button');
-      b.textContent = { keep: '✓ Behalten', delete: '✗ Löschen', ignore: '○ Ignorieren' }[a];
+      b.textContent = { keep: '✓ Keep', delete: '✗ Delete', ignore: '○ Ignore' }[a];
       b.dataset.action = a;
       if (actions[v.path] === a) b.classList.add('active', a);
       b.addEventListener('click', () => {
@@ -282,13 +282,13 @@ function renderCluster(cluster, idx) {
   });
   footer.innerHTML = `
     <div class="summary">
-      <strong>${counts.keep}</strong> behalten ·
-      <strong>${counts.delete}</strong> löschen (${formatBytes(bytesToDelete)}) ·
-      <strong>${counts.ignore}</strong> ignorieren
+      <strong>${counts.keep}</strong> keep ·
+      <strong>${counts.delete}</strong> delete (${formatBytes(bytesToDelete)}) ·
+      <strong>${counts.ignore}</strong> ignore
     </div>
     <div class="buttons">
       <button class="btn-skip">Skip</button>
-      <button class="btn-confirm primary">Bestätigen ⏎</button>
+      <button class="btn-confirm primary">Confirm ⏎</button>
     </div>
   `;
   div.appendChild(footer);
@@ -347,10 +347,10 @@ function renderStatsAndRoots() {
 
   const rootsBar = document.getElementById('rootsBar');
   const roots = currentState.roots || [];
-  // Sicher gegen HTML im Pfadnamen: keine innerHTML-Konkatenation, sondern
-  // textContent pro Tag (verhindert DOM-XSS bei Pfaden wie <img onerror=...>).
+  // Safe against HTML in path names: no innerHTML concatenation, textContent
+  // per tag (prevents DOM XSS with paths like <img onerror=...>).
   rootsBar.replaceChildren();
-  rootsBar.append('Suchpfade: ');
+  rootsBar.append('Folders: ');
   roots.forEach(r => {
     const span = document.createElement('span');
     span.className = 'root-tag';
@@ -369,16 +369,16 @@ function renderAll() {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.innerHTML = currentState.scanning
-      ? `<h2>Scan läuft…</h2><p>Bitte warten, bis Cluster gefunden werden.</p>`
-      : `<h2>Keine Duplikate gefunden 🎉</h2><p>Alle deine Videos scheinen einzigartig zu sein.</p>`;
+      ? `<h2>Scanning...</h2><p>Groups of duplicates show up here as soon as they are found.</p>`
+      : `<h2>No duplicates found 🎉</h2><p>All your videos seem to be unique.</p>`;
     container.appendChild(empty);
     return;
   }
 
   container.innerHTML = '';
 
-  // Trenne pending und decided. Die idx-Werte beziehen sich weiter auf
-  // currentState.clusters (für Tastatur-Navigation und focusedClusterIdx).
+  // Split pending and decided. The idx values still refer to
+  // currentState.clusters (for keyboard navigation and focusedClusterIdx).
   const pending = [];
   const decided = [];
   currentState.clusters.forEach((cl, i) => {
@@ -395,7 +395,7 @@ function renderAll() {
   if (decided.length > 0) {
     const drawer = document.createElement('details');
     drawer.className = 'decided-drawer';
-    // Zustand merken (offen/zu) zwischen Re-Renders
+    // Remember the state (open or closed) between renders
     drawer.open = renderAll._drawerOpen === true;
     drawer.addEventListener('toggle', () => {
       renderAll._drawerOpen = drawer.open;
@@ -405,7 +405,7 @@ function renderAll() {
     summary.className = 'decided-drawer-summary';
     summary.innerHTML = `
       <span class="drawer-icon">✓</span>
-      <span class="drawer-title">Bereits entschieden</span>
+      <span class="drawer-title">Decided already</span>
       <span class="drawer-count">${decided.length}</span>
     `;
     drawer.appendChild(summary);
@@ -425,13 +425,13 @@ function renderAll() {
 
 
 // ============================================================================
-// Aktionen
+// Actions
 // ============================================================================
 
 async function confirmCluster(clusterId) {
   const cl = currentState.clusters.find(c => c.id === clusterId);
   if (!cl) return;
-  // Button-Fokus loswerden, damit kein Update geblockt wird
+  // Drop the button focus, so no update is blocked
   if (document.activeElement && document.activeElement.blur) {
     document.activeElement.blur();
   }
@@ -442,9 +442,9 @@ async function confirmCluster(clusterId) {
   const keepCount = decisions.filter(d => d.action === 'keep').length;
   const deleteCount = decisions.filter(d => d.action === 'delete').length;
 
-  // Warnung nur anzeigen, wenn gelöscht wird, aber nichts behalten wird!
+  // Warn only when files are deleted and none is kept.
   if (keepCount === 0 && deleteCount > 0) {
-    if (!confirm('Du hast keine Datei zum Behalten markiert, löschst aber Dateien! Wirklich fortfahren?')) return;
+    if (!confirm('No file of this group is marked Keep, but files will be deleted. Go on anyway?')) return;
   }
 
   try {
@@ -454,15 +454,15 @@ async function confirmCluster(clusterId) {
       body: JSON.stringify({ clusterId, decisions }),
     });
     if (r.errors && r.errors.length) {
-      showToast(`Bestätigt, aber ${r.errors.length} Fehler aufgetreten.`, 'error', 5000);
+      showToast(`Confirmed, but ${r.errors.length} problem(s): ${r.errors[0]}`, 'error', 8000);
     } else {
-      showToast(`✓ ${deleteCount} Datei(en) in Papierkorb verschoben.`, 'success');
+      showToast(`✓ ${deleteCount} file(s) moved to the recycle bin.`, 'success');
     }
     delete pendingActions[clusterId];
     await refresh(true);
     advanceFocus();
   } catch (e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 }
 
@@ -481,11 +481,11 @@ async function undoCluster(clusterId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clusterId }),
     });
-    showToast(r.note || 'Rückgängig gemacht.', 'info', 4000);
+    showToast(r.errors && r.errors.length ? `Undone, but: ${r.errors[0]}` : (r.note || 'Undone.'), r.errors && r.errors.length ? 'error' : 'info', 6000);
     delete pendingActions[clusterId];
     await refresh(true);
   } catch (e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 }
 
@@ -509,11 +509,11 @@ function advanceFocus() {
 
 function updateFocusVisuals() {
   document.querySelectorAll('.cluster.focused').forEach(el => el.classList.remove('focused'));
-  // Den aktiven Cluster über sein stabiles data-idx finden, NICHT über die
-  // Position in der DOM-Liste: Entschiedene Cluster wandern in die Schublade
-  // "Bereits entschieden" ans Ende, dadurch passt die Listen-Position nicht mehr
-  // zum Index aus currentState.clusters. Über das data-idx (= genau dieser Index)
-  // treffen Markierung und Zentrieren immer den richtigen Cluster.
+  // Find the active group by its stable data-idx, NOT by its position in the
+  // DOM list: decided groups move to the drawer "Decided already" at the end,
+  // so the list position no longer matches the index in currentState.clusters.
+  // With data-idx (exactly that index) highlighting and centring always hit
+  // the right group.
   const el = document.querySelector('.cluster[data-idx="' + focusedClusterIdx + '"]');
   if (el) {
     el.classList.add('focused');
@@ -522,7 +522,7 @@ function updateFocusVisuals() {
 }
 
 // ============================================================================
-// Tastenkürzel
+// Keyboard shortcuts
 // ============================================================================
 
 document.addEventListener('keydown', async (e) => {
@@ -564,7 +564,7 @@ document.addEventListener('keydown', async (e) => {
           return;
         }
       }
-      showToast('Nichts zum Rückgängigmachen.', 'info');
+      showToast('Nothing to undo.', 'info');
       break;
     case 'ArrowDown':
       e.preventDefault();
@@ -588,7 +588,7 @@ document.addEventListener('keydown', async (e) => {
 });
 
 // ============================================================================
-// Topbar-Buttons
+// Top bar buttons
 // ============================================================================
 
 document.getElementById('btnHelp').addEventListener('click', () => {
@@ -598,10 +598,10 @@ document.getElementById('btnHelp').addEventListener('click', () => {
 document.getElementById('btnRescan').addEventListener('click', async () => {
   try {
     await api('/api/rescan', { method: 'POST' });
-    showToast('Rescan gestartet.', 'info');
+    showToast('Rescan started.', 'info');
     setTimeout(startPolling, 500);
   } catch (e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 });
 
@@ -622,26 +622,26 @@ document.getElementById('addRootDialog').addEventListener('close', async (e) => 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
     });
-    showToast('Pfad hinzugefügt. Starte Rescan…', 'success');
+    showToast('Folder added. Starting the rescan...', 'success');
     await api('/api/rescan', { method: 'POST' });
     setTimeout(startPolling, 500);
   } catch (err) {
-    showToast('Fehler: ' + err.message, 'error');
+    showToast('Error: ' + err.message, 'error');
   }
 });
 
 document.getElementById('btnShutdown').addEventListener('click', async () => {
-  if (!confirm('DupFinder beenden? Bereits getroffene Entscheidungen sind gespeichert.')) return;
+  if (!confirm('Quit DupFinder? Your decisions so far are saved.')) return;
   try {
     await api('/api/shutdown', { method: 'POST' });
-    document.body.innerHTML = '<div class="empty-state"><h2>Programm beendet.</h2><p>Du kannst dieses Fenster schließen.</p></div>';
+    document.body.innerHTML = '<div class="empty-state"><h2>DupFinder has ended.</h2><p>You can close this window.</p></div>';
   } catch (e) {
-    showToast('Fehler: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 });
 
 // ============================================================================
-// Polling – nur während Scan aktiv
+// Polling, only while a scan runs
 // ============================================================================
 
 async function refresh(force = false) {
@@ -708,13 +708,13 @@ async function tickProgress() {
 }
 
 function startPolling() {
-  if (evtSource && evtSource.readyState !== EventSource.CLOSED) return; // SSE aktiv → kein Polling
+  if (evtSource && evtSource.readyState !== EventSource.CLOSED) return; // events are on: no polling
   if (!pollTimer) tickRefresh();
   if (!progressTimer) tickProgress();
 }
 
 // ============================================================================
-// SSE – Push statt Polling (mit automatischem Fallback aufs Polling)
+// Server-Sent Events: push instead of polling (falls back to polling by itself)
 // ============================================================================
 
 let evtSource = null;
@@ -730,7 +730,7 @@ function startSSE() {
   }
   evtSource.addEventListener('open', () => {
     sseFailed = false;
-    // Client-Polling stoppen – der Server pusht jetzt.
+    // Stop polling: the server pushes now.
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (progressTimer) { clearTimeout(progressTimer); progressTimer = null; }
   });
@@ -739,8 +739,8 @@ function startSSE() {
     try { applyProgress(JSON.parse(e.data)); } catch {}
   });
   evtSource.addEventListener('error', () => {
-    // EventSource reconnectet von selbst. Scheitert es dauerhaft, einmalig
-    // auf das bewährte Polling zurückfallen – kein stiller Stillstand.
+    // EventSource reconnects by itself. If it keeps failing, fall back to
+    // polling once, so the page never silently stands still.
     if (!sseFailed) {
       sseFailed = true;
       setTimeout(() => {
@@ -754,6 +754,6 @@ function startSSE() {
 
 (async () => {
   await refresh(true);
-  await pollProgress(); // erster Progress-Snapshot
-  startSSE();           // primär: Server-Push; Polling nur als Fallback
+  await pollProgress(); // first progress snapshot
+  startSSE();           // server push first, polling only as fallback
 })();
