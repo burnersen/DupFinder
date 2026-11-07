@@ -51,7 +51,7 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 - ⌨️ **Fast keyboard review.** Walk through groups and decide in seconds (see shortcuts below).
 - 🛡️ **Safe with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), never a hard delete. Decisions are remembered between runs and can be undone.
 - 💾 **Cached.** Results are stored, so a second scan of the same files is near-instant — only new or changed files are re-examined.
-- 🔒 **Stays on your machine.** The UI is served on `localhost` only; nothing is uploaded anywhere.
+- 🔒 **Stays on your machine.** The UI is served on this computer only (`127.0.0.1`), protected by a one-time key; nothing is uploaded anywhere.
 
 ---
 
@@ -61,7 +61,7 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 DupFinder.exe <folder> [more folders ...]
 ```
 
-The web UI runs at `http://localhost:8765` (the next free port is used if that one is busy) and opens by itself.
+The web UI opens by itself at `http://127.0.0.1:8765` (the next free port is used if that one is busy). The link DupFinder opens carries a one-time key, new on every start: only that browser can use the UI, other web pages cannot reach it. If you close the tab, open the link shown in the DupFinder window again.
 
 ### Keyboard shortcuts
 

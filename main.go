@@ -147,7 +147,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	url := fmt.Sprintf("http://localhost:%d", port)
+	guard, err := newWebGuard(port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FEHLER: %v\n", err)
+		os.Exit(2)
+	}
+	url := guard.url()
 	fmt.Printf("\n========================================\n")
 	fmt.Printf(" Web-UI bereit unter:  %s\n", url)
 	fmt.Printf("========================================\n\n")
@@ -156,9 +161,9 @@ func main() {
 
 	go openBrowser(url)
 
-	srv := newServer(state, cacheFile, ignoreFile)
+	srv := newServer(state, cacheFile, ignoreFile, guard)
 	globalSrv = srv
-	if err := srv.run(port); err != nil && err != http.ErrServerClosed {
+	if err := srv.run(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "Server-Fehler: %v\n", err)
 		os.Exit(2)
 	}
@@ -184,13 +189,13 @@ func setupSignalHandler() {
 
 func findFreePort() int {
 	for _, p := range []int{8765, 8766, 8767, 8768, 8769} {
-		l, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", p))
+		l, err := net.Listen("tcp", listenAddr(p))
 		if err == nil {
 			_ = l.Close()
 			return p
 		}
 	}
-	l, err := net.Listen("tcp", "localhost:0")
+	l, err := net.Listen("tcp", listenAddr(0))
 	if err != nil {
 		return 0
 	}

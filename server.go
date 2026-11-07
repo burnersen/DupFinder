@@ -17,26 +17,34 @@ import (
 	"time"
 )
 
+// recycle moves a file to the recycle bin. A variable so tests can see what
+// would be moved without touching the recycle bin.
+var recycle = moveToRecycleBin
+
 type server struct {
 	state      *appState
 	cacheFile  string
 	ignoreFile string
+	guard      *webGuard
 	httpSrv    *http.Server
 }
 
-func newServer(state *appState, cacheFile, ignoreFile string) *server {
-	return &server{state: state, cacheFile: cacheFile, ignoreFile: ignoreFile}
+func newServer(state *appState, cacheFile, ignoreFile string, guard *webGuard) *server {
+	return &server{state: state, cacheFile: cacheFile, ignoreFile: ignoreFile, guard: guard}
 }
 
-func (s *server) run(port int) error {
+func (s *server) run() error {
 	s.httpSrv = &http.Server{
-		Addr:         fmt.Sprintf("localhost:%d", port),
-		Handler:      s.routes(),
+		Addr:         listenAddr(s.guard.port),
+		Handler:      s.handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
 	return s.httpSrv.ListenAndServe()
 }
+
+// handler is the API behind the key and Host checks of webguard.go.
+func (s *server) handler() http.Handler { return s.guard.wrap(s.routes()) }
 
 // routes is the whole HTTP API; tests call it without a listening server.
 func (s *server) routes() http.Handler {
@@ -101,7 +109,9 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	defer s.state.mu.RUnlock()
 
 	resp := stateResponse{
-		Roots:    append([]string(nil), s.state.roots...),
+		// Empty lists, never null: the page reads .length on both.
+		Roots:    append([]string{}, s.state.roots...),
+		Clusters: []clusterDTO{},
 		Scanning: s.state.scanning.Load(),
 	}
 	for _, cl := range s.state.clusters {
@@ -252,13 +262,25 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	var decided bool
+	var badDecision error
+	if cl != nil {
+		decided = cl.Decided
+		badDecision = checkDecisions(cl, req.Decisions)
+	}
 	s.state.mu.Unlock()
 
 	if cl == nil {
 		http.Error(w, "Cluster nicht gefunden", http.StatusNotFound)
 		return
 	}
-	if cl.Decided {
+	// Checked before anything happens: a decision may only name files of
+	// this group, so no request can send any other file to the recycle bin.
+	if badDecision != nil {
+		http.Error(w, badDecision.Error(), http.StatusBadRequest)
+		return
+	}
+	if decided {
 		http.Error(w, "Cluster bereits entschieden", http.StatusConflict)
 		return
 	}
@@ -267,7 +289,7 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 	for _, d := range req.Decisions {
 		switch d.Action {
 		case "delete":
-			if err := moveToRecycleBin(d.Path); err != nil {
+			if err := recycle(d.Path); err != nil {
 				deleteErrors = append(deleteErrors, fmt.Sprintf("%s: %v", d.Path, err))
 			}
 		case "ignore":
@@ -289,6 +311,29 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 		resp["errors"] = deleteErrors
 	}
 	writeJSON(w, resp)
+}
+
+// checkDecisions accepts only the known actions, and only for files that
+// belong to the group. The caller holds state.mu.
+func checkDecisions(cl *clusterState, decisions []decision) error {
+	for _, d := range decisions {
+		switch d.Action {
+		case "keep", "delete", "ignore":
+		default:
+			return fmt.Errorf("unknown action %q", d.Action)
+		}
+		known := false
+		for _, v := range cl.Videos {
+			if v.Path == d.Path {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("file is not part of this group: %s", d.Path)
+		}
+	}
+	return nil
 }
 
 // ============================================================================

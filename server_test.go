@@ -31,7 +31,7 @@ func testServer(t *testing.T) (*server, []string) {
 		ignored:  &ignoreList{paths: map[string]bool{}},
 		clusters: []*clusterState{{ID: "c1", Videos: videos}},
 	}
-	return newServer(state, filepath.Join(dir, "cache.json"), filepath.Join(dir, "ignored.json")), paths
+	return newServer(state, filepath.Join(dir, "cache.json"), filepath.Join(dir, "ignored.json"), nil), paths
 }
 
 func do(t *testing.T, s *server, method, target, contentType, body string) *httptest.ResponseRecorder {
@@ -163,4 +163,64 @@ func TestMain(m *testing.M) {
 	// stray call fails instead of opening windows on a developer machine.
 	os.Setenv("PATH", "")
 	os.Exit(m.Run())
+}
+
+// Bug found 07.11.2026: /api/decide moved any path it was sent to the
+// recycle bin, not only the files of the group. Together with a missing
+// Host check a foreign web page could do that via DNS rebinding.
+func TestDecideOnlyTouchesFilesOfTheGroup(t *testing.T) {
+	s, paths := testServer(t)
+	var recycled []string
+	recycle = func(p string) error { recycled = append(recycled, p); return nil }
+	t.Cleanup(func() { recycle = moveToRecycleBin })
+
+	foreign := filepath.Join(t.TempDir(), "important.docx")
+	writeFile(t, foreign, []byte("x"))
+	for _, d := range [][]decision{
+		{{Path: paths[0], Action: "keep"}, {Path: foreign, Action: "delete"}},
+		{{Path: paths[0], Action: "keep"}, {Path: paths[1], Action: "format"}},
+	} {
+		body, _ := json.Marshal(map[string]any{"clusterId": "c1", "decisions": d})
+		if rec := do(t, s, http.MethodPost, "/api/decide", "application/json", string(body)); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v: %d, want 400", d, rec.Code)
+		}
+	}
+	if len(recycled) != 0 || s.state.clusters[0].Decided {
+		t.Fatalf("recycled %v, decided %v", recycled, s.state.clusters[0].Decided)
+	}
+}
+
+// README: "Delete moves a file to the Windows recycle bin, never a hard
+// delete."
+func TestDeleteGoesToTheRecycleBinOnly(t *testing.T) {
+	s, paths := testServer(t)
+	var recycled []string
+	recycle = func(p string) error { recycled = append(recycled, p); return nil }
+	t.Cleanup(func() { recycle = moveToRecycleBin })
+
+	body, _ := json.Marshal(map[string]any{"clusterId": "c1", "decisions": []decision{
+		{Path: paths[0], Action: "keep"}, {Path: paths[1], Action: "delete"},
+	}})
+	if rec := do(t, s, http.MethodPost, "/api/decide", "application/json", string(body)); rec.Code != http.StatusOK {
+		t.Fatalf("decide: %d %s", rec.Code, rec.Body)
+	}
+	if len(recycled) != 1 || recycled[0] != paths[1] {
+		t.Fatalf("recycled %v", recycled)
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s is gone: DupFinder itself must never delete", p)
+		}
+	}
+}
+
+// Bug found 07.11.2026: with no duplicates /api/state sent "clusters": null,
+// the page failed on null.length and kept showing "-" instead of the result.
+func TestStateSendsEmptyListWhenNothingFound(t *testing.T) {
+	s, _ := testServer(t)
+	s.state.clusters = nil
+	rec := do(t, s, http.MethodGet, "/api/state", "", "")
+	if !strings.Contains(rec.Body.String(), `"clusters":[]`) {
+		t.Fatalf("got %s", rec.Body)
+	}
 }
