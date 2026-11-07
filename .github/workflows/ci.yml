@@ -2,8 +2,12 @@
 # Copyright (C) 2026 burnersen
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Checks every push and pull request on Windows, where DupFinder runs:
-# gofmt, go vet and a build. Nothing is published here.
+# Checks every push and pull request. Nothing is published here.
+#
+# Linux runs the tests: the detection logic is platform neutral, so it runs
+# anywhere, and Linux runners are fast. The Windows code is vetted from
+# Linux, then DupFinder is built, tested and started once on a real
+# Windows runner, where it is used.
 name: CI
 
 on:
@@ -14,29 +18,62 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: windows-latest
+  test:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: 'stable'
+          # The go line in go.mod is the version releases are built with.
+          go-version-file: go.mod
+          # No go.sum without dependencies: a cache would only warn.
           cache: false
 
-      # gofmt -l only lists offenders; turning its output into the verdict
-      # is the point of this step.
+      # gofmt -l only lists offenders and exits 0; turning its output into
+      # the verdict is the point of this step.
       - name: gofmt
         run: |
-          $unformatted = gofmt -l .
-          if ($unformatted) {
-            Write-Host "::error::These files are not gofmt-clean:"
-            $unformatted | ForEach-Object { Write-Host "  $_" }
-            exit 1
-          }
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "::error::not gofmt-clean:"; echo "$unformatted"; exit 1; fi
 
-      - name: go vet
-        run: go vet ./...
+      - name: go vet (Linux, Windows x64)
+        run: |
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
 
-      - name: go build
-        run: go build -o DupFinder.exe .
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      # Built with the toolchain from go.mod (GOTOOLCHAIN=local): a
+      # govulncheck built with an older Go cannot read newer sources.
+      - name: govulncheck
+        run: |
+          GOTOOLCHAIN=local go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+          GOOS=windows govulncheck ./...
+
+      - name: build for the release target
+        run: GOOS=windows GOARCH=amd64 go build -o /dev/null .
+
+  windows:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: go test (native Windows)
+        run: go test -count=1 ./...
+      - name: build
+        run: go build -trimpath -o DupFinder.exe .
+      # The exe must start, answer and end with the documented exit codes.
+      - name: smoke test
+        shell: pwsh
+        run: |
+          ./DupFinder.exe -version
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::-version must end with exit code 0"; exit 1 }
+          ./DupFinder.exe
+          if ($LASTEXITCODE -ne 1) { Write-Host "::error::no folder given must end with exit code 1"; exit 1 }
+          exit 0

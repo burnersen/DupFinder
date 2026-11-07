@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,15 +27,15 @@ import (
 )
 
 const (
-	// PERF: 8 → 6 Sample-Frames. Pro Video werden jetzt nur noch 6 statt 8
-	// Frames dekodiert (≈25 % weniger Decode-Arbeit im Hash-Hotpath), bei
-	// gleichbleibender Trennschärfe nach dem Duration-Clustering.
+	// PERF: 6 sample frames instead of 8. Each video decodes 6 frames now
+	// (about 25 % less decoding in the hash hot path), with the same
+	// selectivity after grouping by duration.
 	sampleCount       = 6
 	durationTolerance = 500 * time.Millisecond
 	maxHashDistance   = 10
-	// minMatchingFrames: 4 von 6. Behält denselben absoluten Spielraum wie
-	// früher (6 von 8) — es dürfen weiterhin bis zu 2 Sample-Frames abweichen
-	// (Schwarzbilder, Letterbox, Abspann). Wer strenger filtern will: auf 5.
+	// minMatchingFrames: 4 of 6. Keeps the same absolute slack as before
+	// (6 of 8): up to 2 sample frames may differ (black frames, letterbox,
+	// credits). For a stricter filter: 5.
 	minMatchingFrames = 4
 	maxProbeWorkers   = 64
 	maxHashWorkers    = 32
@@ -44,52 +45,51 @@ const (
 
 	videoExtensions = ".mkv,.mp4,.m4v,.avi,.mov,.webm,.ts,.m2ts,.wmv,.flv,.mpg,.mpeg,.vob,.3gp,.divx"
 
-	// Schwelle für Hybrid-Strategie:
-	//   < bulkDurationLimit  → Bulk-Extract (1 ffmpeg-Call, dekodiert LINEAR ohne Seek!)
-	//   >= bulkDurationLimit → Single-Calls mit Two-Stage-Seek (Keyframe-Sprung)
+	// Threshold of the hybrid strategy:
+	//   < bulkDurationLimit  bulk extract (1 ffmpeg call, decodes LINEARLY without seeking)
+	//   >= bulkDurationLimit single calls with two-stage seek (jump to keyframe)
 	//
-	// PERF-FIX: Früher 5*time.Minute. Der Bulk-Pfad nutzt den select-Filter, der
-	// NICHT seeken kann — ffmpeg dekodiert das Video linear von t=0 bis zum
-	// letzten Sample bei 95 % und wirft fast alle Frames weg. Bei mehrminütigen
-	// Videos (1080p/4K) ist genau das der Hauptkostentreiber beim ersten Hashen.
-	// Mit 20s landen praktisch alle realen Videos im Single-Seek-Pfad (springt
-	// pro Sample direkt zum Keyframe, dekodiert nur ~1 GOP statt das halbe File).
-	// Nur echte Sekunden-Clips bleiben Bulk, wo linearer Decode trivial ist.
+	// PERF FIX: was 5*time.Minute. The bulk path uses the select filter, which
+	// CANNOT seek: ffmpeg decodes the video linearly from t=0 to the last
+	// sample at 95 % and throws almost every frame away. For videos of several
+	// minutes (1080p/4K) that is the main cost of the first hashing run.
+	// With 20 s practically every real video takes the single-seek path (jumps
+	// straight to the keyframe per sample, decodes about 1 GOP instead of half the file).
+	// Only clips of a few seconds stay bulk, where a linear decode is trivial.
 	bulkDurationLimit = 20 * time.Second
 
-	// Timeouts für externe Prozesse: großzügig, damit legitime langsame
-	// Extraktionen (4K/HDD/hohe Parallelität) NICHT fälschlich gekillt werden.
-	// Greifen nur im echten Hänger-Fall (kaputte Datei, Netzlaufwerk-Stall,
-	// GPU-Treiber-Lock) und verhindern dann den bisherigen Endlos-Block.
+	// Timeouts for external processes: generous, so that legitimately slow
+	// extractions (4K, HDD, high parallelism) are NOT killed by mistake. They
+	// only apply when something really hangs (broken file, stalled network
+	// drive, GPU driver lock) and then stop what used to block forever.
 	ffprobeTimeout = 90 * time.Second
 	ffmpegTimeout  = 180 * time.Second
 
-	// cacheSaveInterval drosselt das Zwischenspeichern der cache.json während der
-	// Hash-Phase. Statt nach jeweils 5 Clustern die KOMPLETTE Datei neu zu
-	// schreiben (bei großen Bibliotheken sehr viele teure Vollschreibungen),
-	// wird höchstens alle paar Sekunden gespeichert. Bricht der Scan ab, geht
-	// nur das letzte Zeitfenster verloren; die finale Speicherung am Scan-Ende
-	// bleibt davon unberührt.
+	// cacheSaveInterval limits how often cache.json is saved during the hash
+	// phase. Instead of rewriting the WHOLE file after every 5 groups (very
+	// many expensive full writes for large libraries), it is saved at most
+	// every few seconds. If the scan stops, only the last time window is lost;
+	// the final save at the end of the scan is not affected.
 	cacheSaveInterval = 15 * time.Second
 )
 
-// useHwAccel steuert die Decode-Strategie der HASH-Phase im Long-Video-Pfad und
-// ist per Env DUPFINDER_HWACCEL OHNE Neukompilieren schaltbar:
+// useHwAccel chooses the decoding of the HASH phase on the long-video path
+// and can be switched with DUPFINDER_HWACCEL WITHOUT rebuilding:
 //
-//	DEFAULT (kein Env / =0) → CPU-Single-Call (multiInputExtractHashes, useGPU=false):
-//	    EIN ffmpeg-Prozess pro Video holt alle Sample-Frames über mehrere -ss…-i-
-//	    Inputs und mappt sie auf PGM-Outputs. Reiner CPU-Decode — sättigt die CPU
-//	    (schnellster Pfad auf 8C/16T + NVMe) und spart gegenüber dem alten Pfad
-//	    ~sampleCount−1 ffmpeg-Starts PRO VIDEO (Prozess-Spawn ist auf Windows teuer).
+//	DEFAULT (not set / =0): CPU single call (multiInputExtractHashes, useGPU=false):
+//	    ONE ffmpeg process per video fetches all sample frames through several
+//	    -ss ... -i inputs mapped to PGM outputs. Pure CPU decoding: saturates the
+//	    CPU (fastest path on 8C/16T + NVMe) and saves about sampleCount-1 ffmpeg
+//	    starts PER VIDEO compared with the old path (starting a process is expensive on Windows).
 //
-//	DUPFINDER_HWACCEL=1 → GPU-Single-Call (useGPU=true):
-//	    Gleicher Single-Call, aber HEVC-Decode auf NVDEC via -init_hw_device
-//	    cuda:0=gpu (einmal) + -hwaccel_device gpu (je Input → ein gemeinsamer
-//	    CUDA-Context). Auf dieser Hardware gemessen LANGSAMER (GPU läuft zwischen
-//	    den Seeks leer), daher nicht Default. Bleibt als Option erhalten.
+//	DUPFINDER_HWACCEL=1: GPU single call (useGPU=true):
+//	    The same single call, but HEVC decoding on NVDEC via -init_hw_device
+//	    cuda:0=gpu (once) + -hwaccel_device gpu (per input, one shared CUDA
+//	    context). Measured SLOWER on the developer's hardware (the GPU idles
+//	    between the seeks), so not the default. Kept as an option.
 //
-//	GPU an :  set DUPFINDER_HWACCEL=1   (=true / =on / =ja / =an)
-//	GPU aus:  Variable weglassen (Default)
+//	GPU on:  set DUPFINDER_HWACCEL=1   (=true / =on / =ja / =an)
+//	GPU off: leave the variable out (default)
 var useHwAccel = hwAccelEnabled()
 
 func hwAccelEnabled() bool {
@@ -97,35 +97,35 @@ func hwAccelEnabled() bool {
 	case "1", "true", "on", "yes", "ja", "an":
 		return true
 	}
-	return false // Default: CPU-Single-Call (auf dieser Hardware am schnellsten)
+	return false // default: CPU single call (fastest on the developer's hardware)
 }
 
-// fastSeek steuert die Seek-Strategie der HASH-Phase (nicht der Thumbnails).
-// STANDARD jetzt AN: pro Sample wird nur per Input-Seek zum nächstgelegenen
-// Keyframe gesprungen und dieser Frame genommen — der teure Präzisions-Decode
-// vom Keyframe bis zum exakten Ziel-Frame entfällt. Das ist mit Abstand der
-// größte Tempo-Hebel beim ersten Hashen. Für einen DCT-pHash ist Frame-Genauigkeit
-// unnötig (es müssen ohnehin nur minMatchingFrames von sampleCount passen).
-// Trade-off: bei unterschiedlich enkodierten Kopien (abweichendes Keyframe-Raster,
-// v. a. an harten Schnitten) eine minimal geringere Treffgenauigkeit. Wer das
-// genaue Two-Stage-Seek (langsamer) zurückwill, schaltet Fast-Seek per Env ab:
+// fastSeek chooses the seek strategy of the HASH phase (not the thumbnails).
+// ON by default: per sample, an input seek jumps to the nearest keyframe and
+// takes that frame; the expensive precise decode from the keyframe to the
+// exact target frame is skipped. That is by far the biggest speed lever of
+// the first hashing run. A DCT pHash does not need frame accuracy (only
+// minMatchingFrames of sampleCount have to match anyway).
+// Trade-off: for copies encoded differently (another keyframe grid, mostly
+// at hard cuts) a slightly lower hit rate. To get the exact two-stage seek
+// (slower) back, switch fast seek off:
 //
-//	genau (langsamer): set DUPFINDER_FAST_SEEK=0   (=off / =nein / =aus)
-//	schnell (Default): Variable weglassen
+//	exact (slower):  set DUPFINDER_FAST_SEEK=0   (=off / =nein / =aus)
+//	fast (default):  leave the variable out
 var fastSeek = fastSeekEnabled()
 
 func fastSeekEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DUPFINDER_FAST_SEEK"))) {
 	case "0", "false", "off", "no", "nein", "aus":
-		return false // ausdrücklich abgeschaltet → genaues Seeking
+		return false // switched off on purpose: exact seeking
 	}
-	return true // Default: Fast-Seek an (schnellster Pfad)
+	return true // default: fast seek on (fastest path)
 }
 
-// ffmpegSem deckelt die GESAMTzahl gleichzeitiger ffmpeg-Prozesse über alle
-// Cluster- und Frame-Goroutinen hinweg. Der reale Engpass ist nicht die
-// Worker-Zahl, sondern wie viele ffmpeg-Decodes (GPU-NVDEC/Disk) parallel
-// laufen. Default = NumCPU; per Env DUPFINDER_FFMPEG_CONCURRENCY überschreibbar.
+// ffmpegSem caps the TOTAL number of ffmpeg processes running at the same
+// time across all group and frame goroutines. The real bottleneck is not
+// the number of workers but how many ffmpeg decodes (GPU NVDEC, disk) run
+// in parallel. Default NumCPU; DUPFINDER_FFMPEG_CONCURRENCY overrides it.
 var ffmpegSem = make(chan struct{}, ffmpegConcurrency())
 
 func ffmpegConcurrency() int {
@@ -140,8 +140,8 @@ func ffmpegConcurrency() int {
 	return 1
 }
 
-// probeWorkers begrenzt die parallelen ffprobe-Aufrufe (leichtgewichtig, aber
-// auf einer einzelnen HDD/SATA sonst I/O-Thrashing). 2×NumCPU, gedeckelt.
+// probeWorkers limits the parallel ffprobe calls (light, but on a single
+// HDD or SATA disk they would thrash I/O otherwise). 2 x NumCPU, capped.
 func probeWorkers() int {
 	n := 2 * runtime.NumCPU()
 	if n > maxProbeWorkers {
@@ -153,12 +153,12 @@ func probeWorkers() int {
 	return n
 }
 
-// runHiddenCmd startet einen externen Befehl ohne Fenster, gekoppelt an den
-// globalen appCtx (Abbruch bei Shutdown) UND mit einer harten Deadline. So
-// blockiert eine einzige hängende Datei keinen Worker mehr dauerhaft.
+// runHiddenCmd runs an external command without a window, tied to the
+// global appCtx (cancelled on shutdown) AND with a hard deadline, so one
+// hanging file can no longer block a worker for good.
 func runHiddenCmd(path string, timeout time.Duration, args ...string) error {
-	// Globales Prozess-Limit: erst einen Slot holen — oder bei Shutdown sofort
-	// raus, ohne zu blockieren.
+	// Global process limit: take a slot first, or leave at once on shutdown
+	// without blocking.
 	select {
 	case ffmpegSem <- struct{}{}:
 		defer func() { <-ffmpegSem }()
@@ -169,7 +169,10 @@ func runHiddenCmd(path string, timeout time.Duration, args ...string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	hideWindow(cmd)
-	return cmd.Run()
+	if err := startTracked(cmd); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
 
 var samplePositions = []float64{0.10, 0.25, 0.40, 0.55, 0.70, 0.85}
@@ -187,11 +190,11 @@ type videoInfo struct {
 	HasError     bool          `json:"error,omitempty"`
 	ErrorMessage string        `json:"error_message,omitempty"`
 	Hashes       []uint64      `json:"hashes,omitempty"`
-	// FullHashed=true: alle Sample-Frames wurden dekodiert (vollständiger Satz,
-	// auch wenn einzelne Frames legitim 0 sind, z. B. Schwarzbild). false:
-	// nur die Probe-Frames liegen vor (progressives Hashing, nicht-lebend). So
-	// kann ein zweiter Lauf gecachte Probe-Hashes wiederverwenden, ohne neu zu
-	// dekodieren, und trotzdem korrekt bleiben, falls später ein Partner dazukommt.
+	// FullHashed=true: every sample frame was decoded (a complete set, even if
+	// single frames are legitimately 0, e.g. a black frame). false: only the
+	// probe frames are there (progressive hashing, no partner). A second run can
+	// reuse cached probe hashes this way without decoding again, and still be
+	// right if a partner turns up later.
 	FullHashed bool `json:"full,omitempty"`
 }
 
@@ -207,69 +210,16 @@ func pathHash(p string) string {
 }
 
 // ============================================================================
-// Binaries
-// ============================================================================
-
-type binaryPaths struct {
-	ffprobe string // dauerhafter Pfad zu ffprobe.exe (im bin-Ordner neben der EXE)
-	ffmpeg  string // dauerhafter Pfad zu ffmpeg.exe
-	tempDir string // kurzlebiger Scratch-Ordner für Hash-Bilder, via cleanup gelöscht
-}
-
-// ensureBinaries stellt sicher, dass ffmpeg.exe und ffprobe.exe verfügbar sind.
-// Gesucht wird AUSSCHLIESSLICH in binDir (Unterordner "bin" neben der EXE). Fehlt
-// eine der beiden Dateien, werden beide aus dem offiziellen BtbN-Build geladen
-// (siehe download.go) — aus Lizenzgründen werden sie NICHT mit dem Programm
-// ausgeliefert. Zusätzlich wird ein kurzlebiger Scratch-Ordner für die beim
-// Hashen anfallenden Zwischenbilder angelegt (beim Beenden via cleanup gelöscht).
-func ensureBinaries(binDir string) (*binaryPaths, error) {
-	ffmpegPath := filepath.Join(binDir, "ffmpeg.exe")
-	ffprobePath := filepath.Join(binDir, "ffprobe.exe")
-
-	if fileExists(ffmpegPath) && fileExists(ffprobePath) {
-		fmt.Println("FFmpeg/FFprobe gefunden.")
-	} else {
-		fmt.Println("FFmpeg/FFprobe fehlt – lade die offizielle Version (einmalig)…")
-		if err := downloadFFmpeg(binDir); err != nil {
-			return nil, fmt.Errorf("FFmpeg-Download fehlgeschlagen: %w\n"+
-				"Tipp: ffmpeg.exe und ffprobe.exe von https://github.com/BtbN/FFmpeg-Builds "+
-				"manuell in den Ordner %q legen.", err, binDir)
-		}
-		if !fileExists(ffmpegPath) || !fileExists(ffprobePath) {
-			return nil, fmt.Errorf("ffmpeg.exe/ffprobe.exe fehlen weiterhin nach dem Download")
-		}
-	}
-
-	tempDir, err := os.MkdirTemp("", "dupfinder-scratch-*")
-	if err != nil {
-		return nil, err
-	}
-	return &binaryPaths{ffprobe: ffprobePath, ffmpeg: ffmpegPath, tempDir: tempDir}, nil
-}
-
-// fileExists meldet, ob p eine vorhandene, nicht leere Datei ist (kein Ordner).
-func fileExists(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir() && info.Size() > 0
-}
-
-func (bp *binaryPaths) cleanup() {
-	if bp != nil && bp.tempDir != "" {
-		_ = os.RemoveAll(bp.tempDir)
-	}
-}
-
-// ============================================================================
 // Discovery
 // ============================================================================
 
-// skipDirNames – Verzeichnisnamen, die beim Sammeln übersprungen werden
-// (Windows-Papierkorb je Partition + System Volume Information). Vergleich
-// case-insensitiv über strings.ToLower.
+// skipDirNames: folder names skipped while collecting (the Windows recycle
+// bin of every partition, System Volume Information). Compared in lower
+// case.
 var skipDirNames = map[string]bool{
 	"$recycle.bin":              true,
 	"$recycle.bin~":             true,
-	"recycler":                  true, // alter Papierkorb-Name (vor Vista)
+	"recycler":                  true, // old recycle bin name (before Vista)
 	"system volume information": true,
 }
 
@@ -279,8 +229,8 @@ func collectVideoFiles(roots []string) ([]string, error) {
 		extSet[strings.ToLower(strings.TrimSpace(e))] = true
 	}
 
-	// visited wird über alle Roots geteilt (Schleifen-/Doppel-Schutz bei
-	// überlappenden oder verschachtelten Wurzeln) → Mutex.
+	// visited is shared by all roots (protects against loops and doubles with
+	// overlapping or nested roots), hence the mutex.
 	var mu sync.Mutex
 	visited := map[string]bool{}
 	markVisited := func(key string) bool {
@@ -293,8 +243,8 @@ func collectVideoFiles(roots []string) ([]string, error) {
 		return true
 	}
 
-	// walk sammelt in eine LOKALE Slice (pro Root-Goroutine), das vermeidet
-	// Lock-Contention beim Anhängen. Erst am Ende wird zusammengeführt.
+	// walk collects into a LOCAL slice (one per root goroutine), which avoids
+	// lock contention when appending. They are merged at the end.
 	var walk func(dir string, out *[]string) error
 	walk = func(dir string, out *[]string) error {
 		if isShutdownRequested() {
@@ -319,9 +269,9 @@ func collectVideoFiles(roots []string) ([]string, error) {
 			}
 			name := e.Name()
 
-			// PERF: kein os.Stat pro Eintrag mehr — ReadDir liefert den Typ schon
-			// mit. Nur bei Symlinks/Junctions (Reparse-Points) wird aufgelöst, um
-			// das bisherige Verhalten (Symlink-zu-Ordner folgen) zu erhalten.
+			// PERF: no os.Stat per entry: ReadDir already says the type. Only
+			// symlinks and junctions (reparse points) are resolved, to keep the old
+			// behaviour (follow a symlink to a folder).
 			isDir := e.IsDir()
 			if !isDir && e.Type()&os.ModeSymlink != 0 {
 				if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
@@ -331,10 +281,10 @@ func collectVideoFiles(roots []string) ([]string, error) {
 
 			full := filepath.Join(dir, name)
 			if isDir {
-				// Windows-System-/Papierkorb-Ordner überspringen: der Explorer
-				// blendet sie aus (versteckt+System), und gelöschte Dateien landen
-				// dort — sie als Duplikat-Kandidaten zu zeigen ist verwirrend und
-				// kann gerade gelöschte Treffer beim nächsten Scan wieder einblenden.
+				// Skip Windows system and recycle bin folders: Explorer hides them
+				// (hidden + system), and deleted files land there. Showing them as
+				// duplicate candidates is confusing and could bring back matches that
+				// were just deleted on the next scan.
 				if skipDirNames[strings.ToLower(name)] {
 					continue
 				}
@@ -350,8 +300,8 @@ func collectVideoFiles(roots []string) ([]string, error) {
 		return nil
 	}
 
-	// Roots PARALLEL durchlaufen — bei eigenständigen Platten echter Speedup
-	// (jede Platte hat eigenen Controller/Kopf, blockiert die anderen nicht).
+	// Walk the roots IN PARALLEL: a real speedup for separate disks (each
+	// disk has its own controller and head, they do not block each other).
 	var wg sync.WaitGroup
 	results := make([][]string, len(roots))
 	errs := make([]error, len(roots))
@@ -406,7 +356,13 @@ func probeVideo(ctx context.Context, ffprobePath, videoPath string) (videoInfo, 
 		"-v", "error", "-print_format", "json",
 		"-show_format", "-show_streams", videoPath)
 	hideWindow(cmd)
-	out, err := cmd.Output()
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err = startTracked(cmd)
+	if err == nil {
+		err = cmd.Wait()
+	}
+	out := stdout.Bytes()
 	if err != nil {
 		info.HasError = true
 		info.ErrorMessage = fmt.Sprintf("ffprobe: %v", err)
@@ -440,7 +396,7 @@ func probeVideo(ctx context.Context, ffprobePath, videoPath string) (videoInfo, 
 	}
 	if info.Duration == 0 || info.Width == 0 {
 		info.HasError = true
-		info.ErrorMessage = "keine Video-Metadaten"
+		info.ErrorMessage = "no video metadata"
 	}
 	return info, nil
 }
@@ -489,12 +445,12 @@ func buildDurationClusters(infos []videoInfo) []cluster {
 	return clusters
 }
 
-// filenameDurWindow – Dauerfenster für Dateiname-Bridge-Paare. Container-Wechsel
-// driften die gemeldete Dauer nur wenig; >5 s deutet auf anderen Inhalt hin.
+// filenameDurWindow: duration window for file name bridge pairs. Changing
+// the container shifts the reported duration a little only; more than 5 s means other content.
 const filenameDurWindow = 5 * time.Second
 
-// filenameNoiseTokens – Tags, die nichts über die Identität aussagen und beim
-// Tokenisieren ignoriert werden, damit nicht zufällig "1080p" zwei Videos brückt.
+// filenameNoiseTokens: tags that say nothing about identity and are
+// ignored when tokenizing, so that "1080p" does not bridge two videos by chance.
 var filenameNoiseTokens = map[string]bool{
 	"1080p": true, "720p": true, "2160p": true, "480p": true, "4k": true, "uhd": true,
 	"h264": true, "h265": true, "x264": true, "x265": true, "hevc": true, "avc": true,
@@ -502,11 +458,11 @@ var filenameNoiseTokens = map[string]bool{
 	"hdtv": true, "dvdrip": true, "xvid": true, "divx": true, "ts": true, "hdr": true,
 	"aac": true, "ac3": true, "dts": true, "mp3": true, "10bit": true, "8bit": true,
 	"proper": true, "repack": true, "internal": true, "remux": true, "extended": true,
-	"the": true, "and": true, "von": true, "der": true, "die": true, "das": true, "und": true,
+	"the": true, "and": true, "von": true, "der": true, "die": true, "das": true, "und": true, // English and German filler words
 }
 
-// tokenizeName zerlegt einen Dateinamen (ohne Endung) in normalisierte Tokens:
-// kleingeschrieben, an Nicht-Buchstaben/Ziffern getrennt, Noise/Kurz-Tokens raus.
+// tokenizeName splits a file name (without extension) into normalised
+// tokens: lower case, split at anything but letters and digits, noise and short tokens dropped.
 func tokenizeName(path string) map[string]bool {
 	base := strings.ToLower(filepath.Base(path))
 	if ext := filepath.Ext(base); ext != "" {
@@ -536,11 +492,11 @@ func tokenizeName(path string) map[string]bool {
 	return toks
 }
 
-// computeFilenameBridges liefert Video-Paare, die (a) NICHT schon im selben
-// Dauer-Cluster liegen (sonst werden sie ohnehin verglichen), (b) sich ≥2
-// aussagekräftige Titel-Tokens teilen und (c) deren Dauer ≤ filenameDurWindow
-// auseinanderliegt. Diese Paare werden später per pHash geprüft — der Name ist
-// nur der Auslöser fürs Vergleichen, nicht der Treffer-Beweis.
+// computeFilenameBridges returns video pairs that (a) are NOT in the same
+// duration group already (those are compared anyway), (b) share at least 2
+// meaningful title tokens and (c) differ in duration by at most
+// filenameDurWindow. These pairs are checked by pHash later: the name only
+// triggers the comparison, it never proves a match.
 func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 	var valid []*videoInfo
 	for i := range infos {
@@ -552,9 +508,9 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 		return nil
 	}
 
-	// Token-Index: Token → Videos. Sehr häufige Tokens (>maxTokenSpread Videos)
-	// sind unspezifisch (z. B. ein überall vorkommender Studio-Name) → ignorieren,
-	// das deckelt zugleich die Paar-Anzahl.
+	// Token index: token to videos. Very common tokens (in more than
+	// maxTokenSpread videos) say nothing (e.g. a studio name everywhere) and are
+	// ignored, which also caps the number of pairs.
 	const maxTokenSpread = 40
 	toks := make([]map[string]bool, len(valid))
 	tokenIndex := map[string][]int{}
@@ -567,7 +523,7 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 
 	type ab struct{ a, b int }
 	shared := map[ab]int{}
-	for t, idxs := range tokenIndex {
+	for _, idxs := range tokenIndex {
 		if len(idxs) < 2 || len(idxs) > maxTokenSpread {
 			continue
 		}
@@ -580,12 +536,11 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 				shared[ab{a, b}]++
 			}
 		}
-		_ = t
 	}
 
 	var pairs [][2]*videoInfo
 	for k, n := range shared {
-		if n < 2 { // mindestens 2 gemeinsame aussagekräftige Tokens
+		if n < 2 { // at least 2 shared meaningful tokens
 			continue
 		}
 		a, b := valid[k.a], valid[k.b]
@@ -594,10 +549,10 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 			d = -d
 		}
 		if d > filenameDurWindow {
-			continue // zu unterschiedliche Länge → anderer Inhalt
+			continue // durations too different: other content
 		}
 		if d <= durationTolerance {
-			continue // gleiches Dauer-Cluster → wird ohnehin verglichen
+			continue // same duration group: compared anyway
 		}
 		pairs = append(pairs, [2]*videoInfo{a, b})
 	}
@@ -621,190 +576,21 @@ func verifyClusterMatches(cl cluster) [][2]int {
 	return pairs
 }
 
-// ============================================================================
-// Cache
-// ============================================================================
-
-type cacheEntry struct {
-	Key  string    `json:"key"`
-	Info videoInfo `json:"info"`
-}
-
-type cache struct {
-	mu      sync.Mutex
-	entries map[string]videoInfo
-	dirty   bool
-}
-
-func loadCache(path string) *cache {
-	c := &cache{entries: map[string]videoInfo{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return c
+// saveCache stores the cache. A cache that cannot be saved costs only time on
+// the next scan, so this goes to the log and not to the screen.
+func saveCache(state *appState, path string) {
+	if err := state.cache.save(path); err != nil {
+		slog.Warn("cache not saved", "err", err)
 	}
-	var entries []cacheEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return c
-	}
-	for _, e := range entries {
-		c.entries[e.Key] = e.Info
-	}
-	return c
-}
-
-func (c *cache) get(path string, size int64, mtime time.Time) (videoInfo, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	info, ok := c.entries[makeCacheKey(path, size, mtime)]
-	return info, ok
-}
-
-func (c *cache) set(info videoInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[makeCacheKey(info.Path, info.Size, info.ModTime)] = info
-	c.dirty = true
-}
-
-func (c *cache) save(path string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.dirty {
-		return nil
-	}
-	entries := make([]cacheEntry, 0, len(c.entries))
-	for k, v := range c.entries {
-		entries = append(entries, cacheEntry{Key: k, Info: v})
-	}
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	c.dirty = false
-	return nil
-}
-
-// pruneMissing entfernt verwaiste Cache-Einträge (Variante A): nur solche, deren
-// Datei NACHWEISLICH nicht mehr existiert (os.Stat → IsNotExist) UND deren Pfad
-// unter einer der aktuell gescannten Wurzeln liegt. So werden verschobene/
-// gelöschte/umbenannte Dateien aufgeräumt, ABER Einträge von gerade nicht
-// gescannten oder offline Platten bleiben unangetastet (kein Datenverlust an
-// gültigen Hashes). Rückgabe: Anzahl entfernter Einträge.
-func (c *cache) pruneMissing(roots []string) int {
-	// Wurzeln normalisieren (kleingeschrieben, sauber) für den Präfix-Vergleich.
-	norm := make([]string, 0, len(roots))
-	for _, r := range roots {
-		norm = append(norm, strings.ToLower(filepath.Clean(r)))
-	}
-	underRoot := func(p string) bool {
-		lp := strings.ToLower(filepath.Clean(p))
-		for _, r := range norm {
-			if lp == r || strings.HasPrefix(lp, r+string(filepath.Separator)) {
-				return true
-			}
-		}
-		return false
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	removed := 0
-	for k, v := range c.entries {
-		if v.Path == "" || !underRoot(v.Path) {
-			continue // außerhalb der gescannten Wurzeln → nicht anfassen
-		}
-		if _, err := os.Stat(v.Path); err != nil && os.IsNotExist(err) {
-			delete(c.entries, k)
-			removed++
-		}
-	}
-	if removed > 0 {
-		c.dirty = true
-	}
-	return removed
 }
 
 // ============================================================================
-// Ignore-Liste
-// ============================================================================
-
-type ignoreList struct {
-	mu    sync.Mutex
-	paths map[string]bool
-}
-
-func loadIgnoreList(path string) *ignoreList {
-	il := &ignoreList{paths: map[string]bool{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return il
-	}
-	var paths []string
-	if err := json.Unmarshal(data, &paths); err == nil {
-		for _, p := range paths {
-			il.paths[p] = true
-		}
-	}
-	return il
-}
-
-func (il *ignoreList) has(p string) bool {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	return il.paths[p]
-}
-
-func (il *ignoreList) add(p string) {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	il.paths[p] = true
-}
-
-func (il *ignoreList) remove(p string) {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	delete(il.paths, p)
-}
-
-func (il *ignoreList) size() int {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	return len(il.paths)
-}
-
-func (il *ignoreList) save(path string) error {
-	il.mu.Lock()
-	paths := make([]string, 0, len(il.paths))
-	for p := range il.paths {
-		paths = append(paths, p)
-	}
-	il.mu.Unlock()
-	sort.Strings(paths)
-	data, err := json.MarshalIndent(paths, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// ============================================================================
-// Voller Scan
+// Full scan
 // ============================================================================
 
 func runFullScan(state *appState, cacheFile string) error {
 	if !state.scanning.CompareAndSwap(false, true) {
-		return errors.New("scan läuft bereits")
+		return errors.New("a scan is running already")
 	}
 	defer state.scanning.Store(false)
 
@@ -812,20 +598,19 @@ func runFullScan(state *appState, cacheFile string) error {
 	roots := append([]string(nil), state.roots...)
 	state.mu.RUnlock()
 
-	updateProgress(state, "Discovery", 0, 0, "Sammle Dateien…")
+	updateProgress(state, "Discovery", 0, 0, "Collecting files...")
 	files, err := collectVideoFiles(roots)
 	if err != nil && !isShutdownRequested() {
 		return err
 	}
 	updateProgress(state, "Discovery", len(files), len(files),
-		fmt.Sprintf("%d Dateien gefunden", len(files)))
+		fmt.Sprintf("%d files found", len(files)))
 
-	// V10 — verwaiste Cache-Einträge aufräumen (Variante A): nur Dateien, die
-	// nachweislich weg sind und unter den gescannten Wurzeln lagen. Hält die
-	// cache.json schlank, wenn (typisch bei Usenet-Workflow) viel verschoben/
-	// umbenannt/gelöscht wird.
+	// Clean up orphaned cache entries: only files that are gone for sure and
+	// were under the scanned roots. Keeps cache.json small when many files are
+	// moved, renamed or deleted.
 	if n := state.cache.pruneMissing(roots); n > 0 {
-		slog.Info("Cache aufgeräumt", "entfernt", n)
+		slog.Info("cache pruned", "removed", n)
 	}
 
 	if len(files) < 2 {
@@ -833,12 +618,12 @@ func runFullScan(state *appState, cacheFile string) error {
 		state.clusters = nil
 		state.mu.Unlock()
 		state.bumpVersion()
-		updateProgress(state, "Done", 0, 0, "Zu wenig Dateien")
+		updateProgress(state, "Done", 0, 0, "Too few files")
 		return nil
 	}
 
 	infos := indexFiles(state, files)
-	_ = state.cache.save(cacheFile)
+	saveCache(state, cacheFile)
 
 	var rerr int64
 	for i := range infos {
@@ -847,9 +632,9 @@ func runFullScan(state *appState, cacheFile string) error {
 		}
 	}
 	state.readErrors.Store(rerr)
-	slog.Info("indexing fertig", "files", len(files), "readErrors", rerr)
+	slog.Info("indexed", "files", len(files), "readErrors", rerr)
 
-	updateProgress(state, "Clustering", 0, 0, "Bilde Cluster…")
+	updateProgress(state, "Clustering", 0, 0, "Grouping...")
 	clusters := buildDurationClusters(infos)
 	totalCandidates := 0
 	for _, cl := range clusters {
@@ -860,18 +645,17 @@ func runFullScan(state *appState, cacheFile string) error {
 		state.clusters = nil
 		state.mu.Unlock()
 		state.bumpVersion()
-		updateProgress(state, "Done", 0, 0, "Keine Duplikate")
+		updateProgress(state, "Done", 0, 0, "No duplicates")
 		return nil
 	}
 
-	// V6 — Dateiname-Bridge: gleicher Inhalt in verschiedenen Containern kann
-	// eine um >500 ms abweichende gemeldete Dauer haben → landet in benachbarten
-	// Clustern und würde sonst nie verglichen. Videos mit deutlich ähnlichen
-	// Dateinamen (gemeinsame Titel-Tokens) innerhalb eines lockeren Dauerfensters
-	// werden als ZUSÄTZLICHE Vergleichspaare aufgenommen. Der pHash entscheidet
-	// weiterhin (≥minMatchingFrames) → reine Namensgleichheit erzeugt KEINE
-	// Falschtreffer. Die beteiligten Videos werden voll gehasht (forceFull),
-	// damit das progressive Hashing sie nicht auf Probe-Frames kürzt.
+	// File name bridge: the same content in different containers can report
+	// durations more than 500 ms apart, land in neighbouring groups and never
+	// be compared. Videos with clearly similar file names (shared title tokens)
+	// within a looser duration window become ADDITIONAL comparison pairs. The
+	// pHash still decides (at least minMatchingFrames), so equal names alone
+	// never make a false match. These videos are hashed in full (forceFull),
+	// so progressive hashing does not cut them down to the probe frames.
 	bridgeCands := computeFilenameBridges(infos)
 	forceFull := map[*videoInfo]bool{}
 	for _, bp := range bridgeCands {
@@ -887,17 +671,17 @@ func runFullScan(state *appState, cacheFile string) error {
 		}
 		computeHashesOnly(state, cl, &hashedCounter, forceFull)
 		updateProgress(state, "Hashing", int(hashedCounter.Load()), totalCandidates,
-			fmt.Sprintf("Cluster %d/%d", ci+1, len(clusters)))
-		// Zeitlich gedrosselt zwischenspeichern statt nach festen Cluster-Schritten:
-		// vermeidet die wiederholte Vollschreibung der cache.json bei großen Läufen.
+			fmt.Sprintf("Group %d/%d", ci+1, len(clusters)))
+		// Save on a timer instead of after a fixed number of groups: avoids
+		// rewriting all of cache.json again and again in large runs.
 		if time.Since(lastCacheSave) >= cacheSaveInterval {
-			_ = state.cache.save(cacheFile)
+			saveCache(state, cacheFile)
 			lastCacheSave = time.Now()
 		}
 	}
-	_ = state.cache.save(cacheFile)
+	saveCache(state, cacheFile)
 
-	// Bridge-Kandidaten per pHash bestätigen (gleiche Schwelle wie im Cluster).
+	// Confirm bridge candidates by pHash (same threshold as within a group).
 	var bridgePairs [][2]*videoInfo
 	for _, bp := range bridgeCands {
 		a, b := bp[0], bp[1]
@@ -917,7 +701,7 @@ func runFullScan(state *appState, cacheFile string) error {
 	state.bumpVersion()
 
 	if len(confirmed) == 0 {
-		updateProgress(state, "Done", 0, 0, "Keine Duplikate")
+		updateProgress(state, "Done", 0, 0, "No duplicates")
 		return nil
 	}
 
@@ -927,7 +711,7 @@ func runFullScan(state *appState, cacheFile string) error {
 		totalThumbVideos += len(cs.Videos)
 	}
 	var thumbCounter atomic.Int64
-	updateProgress(state, "Thumbnails", 0, totalThumbVideos, "Erstelle Vorschauen…")
+	updateProgress(state, "Thumbnails", 0, totalThumbVideos, "Making previews...")
 
 	for _, cs := range confirmed {
 		if isShutdownRequested() {
@@ -937,7 +721,7 @@ func runFullScan(state *appState, cacheFile string) error {
 	}
 
 	updateProgress(state, "Done", len(confirmed), len(confirmed),
-		fmt.Sprintf("%d Duplikat-Gruppe(n)", len(confirmed)))
+		fmt.Sprintf("%d duplicate group(s)", len(confirmed)))
 	return nil
 }
 
@@ -960,7 +744,7 @@ func indexFiles(state *appState, files []string) []videoInfo {
 
 	var done atomic.Int64
 	total := int64(len(files))
-	updateProgress(state, "Indexing", 0, int(total), "Lese Metadaten…")
+	updateProgress(state, "Indexing", 0, int(total), "Reading metadata...")
 
 	var wg sync.WaitGroup
 	pw := probeWorkers()
@@ -990,32 +774,32 @@ func indexFiles(state *appState, files []string) []videoInfo {
 				}
 				d := done.Add(1)
 				if d%50 == 0 {
-					updateProgress(state, "Indexing", int(d), int(total), "Lese Metadaten…")
+					updateProgress(state, "Indexing", int(d), int(total), "Reading metadata...")
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	updateProgress(state, "Indexing", int(total), int(total), "Indexing fertig")
+	updateProgress(state, "Indexing", int(total), int(total), "Indexing done")
 	return results
 }
 
 // ============================================================================
-// HASH-PHASE: Hybrid-Strategie nach Video-Länge
-//   < bulkDurationLimit  → Bulk-Extract (sequenzielles Lesen, schnell bei kurzen)
-//   >= bulkDurationLimit → Single-Calls mit Two-Stage-Seek (Keyframe-Sprung)
+// HASH PHASE: hybrid strategy by video length
+//   < bulkDurationLimit  bulk extract (sequential reading, fast for short clips)
+//   >= bulkDurationLimit single calls with two-stage seek (jump to keyframe)
 // ============================================================================
 
-// probeIndices = die zuerst dekodierten Frames. Bei sampleCount=6 und
-// minMatchingFrames=4 dürfen über alle 6 Frames höchstens 2 abweichen; ein
-// echtes Duplikat hat daher unter JEDEN 3 Frames mindestens 1 Treffer. Mit 3
-// Probe-Frames kann ein Video, dessen Probes mit niemandem matchen, also kein
-// Duplikat sein — die restlichen Frames spart man dann (beweisbar trefferneutral).
+// probeIndices are the frames decoded first. With sampleCount=6 and
+// minMatchingFrames=4, at most 2 of the 6 frames may differ, so a real
+// duplicate has at least 1 match among ANY 3 frames. With 3 probe frames, a
+// video whose probes match nobody cannot be a duplicate, and the remaining
+// frames are saved (provably without losing a match).
 var probeIndices, restIndices = splitProbeRest()
 
 func splitProbeRest() (probe, rest []int) {
-	// budget = erlaubte Abweichungen; Probe muss budget+1 Frames umfassen, damit
-	// „alle Probes daneben" einen Treffer sicher ausschließt.
+	// budget = allowed misses; the probe needs budget+1 frames, so that "all
+	// probes miss" rules out a match for sure.
 	budget := sampleCount - minMatchingFrames
 	probeN := budget + 1
 	if probeN < 1 {
@@ -1035,19 +819,19 @@ func splitProbeRest() (probe, rest []int) {
 }
 
 func computeHashesOnly(state *appState, cl cluster, counter *atomic.Int64, forceFull map[*videoInfo]bool) {
-	// V5 — Exakt-Duplikat-Vorfilter (Variante B): Byte-identische Kopien werden
-	// erkannt, BEVOR ein Frame dekodiert wird (Content-Fingerprint statt Decode).
+	// Exact duplicate prefilter: byte-identical copies are recognised BEFORE a
+	// single frame is decoded (content fingerprint instead of decoding).
 	copyOf := exactDupeReps(cl.videos)
 	hasCopy := map[*videoInfo]bool{}
 	for _, rep := range copyOf {
-		hasCopy[rep] = true // Repräsentant mit Kopien → bekannter Partner → voll hashen
+		hasCopy[rep] = true // representative with copies: known partner, hash in full
 	}
 
-	// 1) Cache füllen + klassifizieren.
-	//    fullCached  : alle Frames dekodiert → fertig (kein Decode).
-	//    probeDone   : nur Probe-Hashes aus Cache → KEIN Probe-Decode mehr nötig,
-	//                  geht aber in die Lebend-Prüfung (evtl. kam ein Partner dazu).
-	//    toProbe     : noch nichts → Probe-Frames dekodieren.
+	// 1) Fill from the cache and sort into:
+	//    fullCached: every frame decoded, done (no decoding).
+	//    probeDone:  only probe hashes from the cache, NO probe decoding needed,
+	//                but goes through the alive check (a partner may have come).
+	//    toProbe:    nothing yet, decode the probe frames.
 	var toProbe, probeDone []*videoInfo
 	for _, v := range cl.videos {
 		if len(v.Hashes) != sampleCount {
@@ -1057,18 +841,18 @@ func computeHashesOnly(state *appState, cl cluster, counter *atomic.Int64, force
 			}
 		}
 		if _, isCopy := copyOf[v]; isCopy {
-			// Byte-Kopie → wird ausschließlich in Schritt 6 behandelt UND gezählt.
-			// Muss VOR dem FullHashed-Zähler stehen, sonst würde eine bereits voll
-			// gecachte Kopie doppelt gezählt (hier + Schritt 6) und der Fortschritt
-			// über 100 % springen.
+			// Byte copy: handled AND counted in step 6 only. Must come BEFORE the
+			// FullHashed count, or a copy that is fully cached already would be
+			// counted twice (here and in step 6) and the progress would go past
+			// 100 %.
 			continue
 		}
 		if len(v.Hashes) == sampleCount && v.FullHashed {
 			counter.Add(1)
-			continue // vollständig gecacht → nichts zu tun
+			continue // fully cached: nothing to do
 		}
 		if len(v.Hashes) == sampleCount && hasProbe(v) {
-			probeDone = append(probeDone, v) // Probe-Hashes aus Cache vorhanden
+			probeDone = append(probeDone, v) // probe hashes from the cache
 		} else {
 			toProbe = append(toProbe, v)
 		}
@@ -1092,19 +876,19 @@ func computeHashesOnly(state *appState, cl cluster, counter *atomic.Int64, force
 		wg.Wait()
 	}
 
-	// 2) STUFE A — Probe-Frames nur für die wirklich neuen Kandidaten dekodieren
-	//    (probeDone hat seine Probes bereits aus dem Cache → kein Decode).
+	// 2) STAGE A: decode probe frames only for candidates that are really new
+	//    (probeDone has its probes from the cache already, no decoding).
 	hashSubset(toProbe, probeIndices)
 
-	// 3) Lebend-Bestimmung: braucht der Kandidat den Rest? Nur wenn seine Probe-
-	//    Frames mit mind. einem anderen Cluster-Video matchen (oder erzwungen voll:
-	//    Byte-Repräsentant / Dateiname-Bridge / unvollständige Probes).
+	// 3) Alive check: does the candidate need the rest? Only if its probe frames
+	//    match at least one other video of the group (or it is forced to full:
+	//    byte representative, file name bridge, incomplete probes).
 	isLive := func(v *videoInfo) bool {
 		if hasCopy[v] || (forceFull != nil && forceFull[v]) {
 			return true
 		}
 		if !allProbesSet(v) {
-			return true // fehlender Probe-Frame → sicherheitshalber voll hashen
+			return true // probe frame missing: hash in full to be safe
 		}
 		for _, w := range cl.videos {
 			if w == v || !hasProbe(w) {
@@ -1124,29 +908,29 @@ func computeHashesOnly(state *appState, cl cluster, counter *atomic.Int64, force
 		}
 	}
 
-	// 4) STUFE B — restliche Frames nur für lebende Kandidaten dekodieren.
+	// 4) STAGE B: decode the remaining frames for alive candidates only.
 	hashSubset(needRest, restIndices)
 	for _, v := range needRest {
 		v.FullHashed = true
 	}
 
-	// 5) Cachen: ALLES, was wir dekodiert haben (Probe-only ODER voll) wird
-	//    gespeichert — so dekodiert ein zweiter Lauf nichts neu. Nicht-lebende
-	//    behalten FullHashed=false (nur Probe-Hashes); kommt später ein Partner
-	//    dazu, wird der Rest dann nachgeholt. probeDone, das nicht-lebend bleibt,
-	//    ist bereits korrekt gecacht → nicht erneut schreiben.
+	// 5) Cache EVERYTHING that was decoded (probe only OR full), so a second
+	//    run decodes nothing again. Candidates that are not alive keep
+	//    FullHashed=false (probe hashes only); if a partner comes later, the
+	//    rest is decoded then. probeDone that stays not alive is cached
+	//    correctly already: not written again.
 	for _, v := range toProbe {
-		state.cache.set(*v) // Probe-only (FullHashed=false) oder voll (true)
+		state.cache.set(*v) // probe only (FullHashed=false) or full (true)
 		counter.Add(1)
 	}
 	for _, v := range probeDone {
 		if v.FullHashed {
-			state.cache.set(*v) // war Probe-only, jetzt voll → aktualisieren
+			state.cache.set(*v) // was probe only, now full: update
 		}
 		counter.Add(1)
 	}
 
-	// 6) Byte-Kopien übernehmen die pHashes ihres (voll gehashten) Repräsentanten.
+	// 6) Byte copies take over the pHashes of their (fully hashed) representative.
 	for v, rep := range copyOf {
 		if len(v.Hashes) == sampleCount && v.FullHashed {
 			counter.Add(1)
@@ -1161,7 +945,7 @@ func computeHashesOnly(state *appState, cl cluster, counter *atomic.Int64, force
 	}
 }
 
-// hasProbe meldet, ob mindestens ein Probe-Frame gesetzt ist.
+// hasProbe reports whether at least one probe frame is set.
 func hasProbe(v *videoInfo) bool {
 	if len(v.Hashes) != sampleCount {
 		return false
@@ -1174,7 +958,7 @@ func hasProbe(v *videoInfo) bool {
 	return false
 }
 
-// allProbesSet meldet, ob ALLE Probe-Frames erfolgreich dekodiert wurden.
+// allProbesSet reports whether ALL probe frames were decoded.
 func allProbesSet(v *videoInfo) bool {
 	if len(v.Hashes) != sampleCount {
 		return false
@@ -1187,8 +971,8 @@ func allProbesSet(v *videoInfo) bool {
 	return true
 }
 
-// probeMatch: teilen a und b mindestens einen passenden Probe-Frame
-// (Hamming ≤ maxHashDistance)? Nur dann kann das Paar ein Duplikat sein.
+// probeMatch: do a and b share at least one matching probe frame (Hamming
+// distance at most maxHashDistance)? Only then can the pair be a duplicate.
 func probeMatch(a, b *videoInfo) bool {
 	if len(a.Hashes) != sampleCount || len(b.Hashes) != sampleCount {
 		return false
@@ -1204,51 +988,51 @@ func probeMatch(a, b *videoInfo) bool {
 	return false
 }
 
-// exactDupeReps gruppiert die Cluster-Videos nach byte-Identität und liefert für
-// jede byte-gleiche Kopie ihren Repräsentanten zurück (copy → representative).
-// Nur Videos, die sich die EXAKTE Dateigröße mit mindestens einem anderen teilen,
-// werden überhaupt fingerprintet (alle anderen können keine Byte-Kopie haben) —
-// das hält den Zusatz-I/O minimal. Der Fingerprint deckt Größe + erste/letzte
-// 8 MB ab; für reale Videodateien ist eine Fehlzuordnung praktisch ausgeschlossen.
+// exactDupeReps groups the videos of a group by byte identity and returns
+// the representative of every byte-identical copy (copy to representative).
+// Only videos that share their EXACT size with at least one other are
+// fingerprinted at all (no other can be a byte copy), which keeps the
+// extra I/O minimal. The fingerprint covers size plus the first and last
+// 8 MB; for real video files a wrong match is practically impossible.
 func exactDupeReps(videos []*videoInfo) map[*videoInfo]*videoInfo {
 	copyOf := map[*videoInfo]*videoInfo{}
 	if len(videos) < 2 {
 		return copyOf
 	}
-	// 1) nach exakter Größe vorgruppieren (gratis, nutzt vorhandene Metadaten)
+	// 1) group by exact size first (free, uses the metadata we have)
 	bySize := map[int64][]*videoInfo{}
 	for _, v := range videos {
 		if v.Size > 0 {
 			bySize[v.Size] = append(bySize[v.Size], v)
 		}
 	}
-	// 2) nur in Größen-Kollisionen fingerprinten, dann nach Fingerprint gruppieren
+	// 2) fingerprint only where sizes collide, then group by fingerprint
 	for _, group := range bySize {
 		if len(group) < 2 {
 			continue
 		}
-		byFP := map[string]*videoInfo{} // fingerprint → bereits gesehener Repräsentant
+		byFP := map[string]*videoInfo{} // fingerprint to the representative seen first
 		for _, v := range group {
 			fp := contentFingerprint(v.Path, v.Size)
 			if fp == "" {
-				continue // Lesefehler → vorsichtshalber normal über pHash laufen lassen
+				continue // read error: to be safe, go the normal pHash way
 			}
 			if rep, ok := byFP[fp]; ok {
-				copyOf[v] = rep // byte-gleich zu rep
+				copyOf[v] = rep // byte-identical to rep
 			} else {
-				byFP[fp] = v // erster mit diesem Fingerprint = Repräsentant
+				byFP[fp] = v // first with this fingerprint = representative
 			}
 		}
 	}
 	return copyOf
 }
 
-// contentFingerprint bildet einen starken Byte-Identitäts-Schlüssel ohne Decode:
-// SHA-256 über Dateigröße + die ersten und letzten fpEdgeBytes. Kleiner als
-// 2×fpEdgeBytes große Dateien werden komplett gehasht. Bei Lesefehler "" (der
-// Aufrufer fällt dann auf den normalen pHash-Pfad zurück).
+// contentFingerprint makes a strong byte identity key without decoding:
+// SHA-256 over the file size plus the first and last fpEdgeBytes. Files
+// smaller than 2 x fpEdgeBytes are hashed completely. On a read error "" (the
+// caller then falls back to the normal pHash path).
 func contentFingerprint(path string, size int64) string {
-	const fpEdgeBytes = 8 << 20 // 8 MiB pro Ende
+	const fpEdgeBytes = 8 << 20 // 8 MiB per end
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -1283,10 +1067,10 @@ func contentFingerprint(path string, size int64) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// processVideoHashes dekodiert die in `indices` angegebenen Sample-Frames in
-// vi.Hashes[idx]. indices==nil bedeutet ALLE Frames. Bereits gesetzte Hashes
-// bleiben erhalten (wichtig für das progressive 2-Stufen-Hashing: erst Probe-
-// Frames, dann ggf. der Rest — ohne die Probe-Ergebnisse zu überschreiben).
+// processVideoHashes decodes the sample frames named in `indices` into
+// vi.Hashes[idx]. indices==nil means ALL frames. Hashes already set stay
+// (important for the progressive 2-stage hashing: probe frames first, then
+// the rest if needed, without overwriting the probe results).
 func processVideoHashes(ffmpegPath string, vi *videoInfo, tempDir string, indices []int) {
 	if vi.Duration <= 0 {
 		return
@@ -1305,8 +1089,8 @@ func processVideoHashes(ffmpegPath string, vi *videoInfo, tempDir string, indice
 
 	durSec := vi.Duration.Seconds()
 
-	// Hybrid: bei kurzen Videos Bulk (dekodiert ohnehin alle Frames in 1 Call,
-	// progressives Teil-Decoding lohnt da nicht), bei langen ein Single-Call.
+	// Hybrid: short videos go bulk (one call decodes all frames anyway, partial
+	// progressive decoding does not pay off), long ones a single call.
 	if vi.Duration < bulkDurationLimit {
 		if bulkExtractHashes(ffmpegPath, vi.Path, durSec, hashDir, vi, useHwAccel) {
 			return
@@ -1314,23 +1098,23 @@ func processVideoHashes(ffmpegPath string, vi *videoInfo, tempDir string, indice
 		if useHwAccel && bulkExtractHashes(ffmpegPath, vi.Path, durSec, hashDir, vi, false) {
 			return
 		}
-		// Bulk fehlgeschlagen → trotzdem Long-Video-Pfad als Fallback
+		// Bulk failed: fall back to the long-video path anyway
 	}
 
-	// Lange Videos ODER Bulk-Fallback: EIN ffmpeg-Prozess pro Video (Single-Call).
+	// Long videos OR bulk fallback: ONE ffmpeg process per video (single call).
 	if useHwAccel {
-		// Optional (DUPFINDER_HWACCEL=1): HEVC-Decode auf NVDEC.
+		// Optional (DUPFINDER_HWACCEL=1): HEVC decoding on NVDEC.
 		if multiInputExtractHashes(ffmpegPath, vi, durSec, hashDir, true, indices) {
 			return
 		}
-		// GPU gescheitert (kein CUDA/Treiber) → CPU-Single-Call.
+		// GPU failed (no CUDA or driver): CPU single call.
 	}
-	// DEFAULT: CPU-Single-Call (1 Prozess, sättigt die CPU, spart Prozessstarts).
+	// DEFAULT: CPU single call (1 process, saturates the CPU, saves process starts).
 	if multiInputExtractHashes(ffmpegPath, vi, durSec, hashDir, false, indices) {
 		return
 	}
-	// Single-Call gescheitert (kaputte/exotische Datei) → robustester Pfad:
-	// Frame-für-Frame (füllt nur noch die verbliebenen 0-Hashes).
+	// Single call failed (broken or unusual file): the most robust path,
+	// frame by frame (fills only the hashes still 0).
 	singleExtractHashes(ffmpegPath, vi, durSec, hashDir)
 }
 
@@ -1342,8 +1126,8 @@ var allIndices = func() []int {
 	return idx
 }()
 
-// bulkExtractHashes – ein einziger ffmpeg-Call extrahiert mit dem select-Filter
-// alle 8 Sample-Frames. Nur sinnvoll bei kurzen Videos.
+// bulkExtractHashes: a single ffmpeg call extracts all sample frames with
+// the select filter. Only sensible for short videos.
 func bulkExtractHashes(ffmpegPath, videoPath string, durSec float64,
 	hashDir string, vi *videoInfo, useGPU bool) bool {
 
@@ -1367,7 +1151,7 @@ func bulkExtractHashes(ffmpegPath, videoPath string, durSec float64,
 		"-i", videoPath,
 		"-an", "-sn", "-dn",
 		"-vf", fmt.Sprintf("select='%s',scale=32:32:flags=area,format=gray", selectExpr),
-		"-vsync", "0",
+		"-fps_mode", "passthrough", // was -vsync 0: no longer in the FFmpeg 9.0 manual, -fps_mode exists since 5.1
 		"-frames:v", fmt.Sprintf("%d", sampleCount),
 		"-f", "image2",
 		"-start_number", "1",
@@ -1400,49 +1184,49 @@ func bulkExtractHashes(ffmpegPath, videoPath string, durSec float64,
 	return gotAny && count >= sampleCount/2
 }
 
-// multiInputExtractHashes – EIN ffmpeg-Prozess pro Video holt ALLE 8 Sample-
-// Frames über 8 Inputs (je ein Input-Seek -ss zum Keyframe nahe dem Ziel-
-// Timestamp) und mappt sie auf 8 PGM-Outputs. Ersetzt im Long-Video-Pfad die
-// bisherigen 8 separaten ffmpeg-Prozesse pro Video.
+// multiInputExtractHashes: ONE ffmpeg process per video fetches ALL sample
+// frames through one input per frame (each an input seek -ss to the keyframe
+// near the target time) mapped to one PGM output each. Replaces the separate
+// ffmpeg process per frame on the long-video path.
 //
-// useGPU=true (Sinn der Übung): -init_hw_device cuda:0=gpu wird EINMAL gesetzt,
-// jeder Input referenziert es per -hwaccel_device gpu → alle 8 Inputs teilen
-// EINEN CUDA-Context, CUDA-Init fällt also nur 1× statt 8× pro Video an. Der
-// HEVC-Decode läuft auf NVDEC (GPU frei), die CPU ist saturiert. Da kein
-// -hwaccel_output_format gesetzt ist, lädt ffmpeg die Frames automatisch in den
-// System-RAM zurück, sodass der triviale 32x32-Graustufen-scale CPU-seitig läuft.
+// useGPU=true: -init_hw_device cuda:0=gpu is set ONCE and every input refers
+// to it with -hwaccel_device gpu, so all inputs share ONE CUDA context and
+// CUDA starts once per video instead of once per frame. HEVC decoding runs
+// on NVDEC (GPU), the CPU is saturated. Without -hwaccel_output_format,
+// ffmpeg copies the frames back into system memory by itself, so the trivial
+// 32x32 grey scale runs on the CPU.
 //
-// useGPU=false: identischer Single-Call, aber reiner CPU-Decode (Fallback bzw.
-// „CPU-Single-Call"-Vergleichswert).
+// useGPU=false: the same single call with pure CPU decoding (fallback, and
+// the "CPU single call" to compare with).
 //
-// TUNING (wichtig beim Messen): Ein Prozess treibt jetzt 8 NVDEC-Decodes parallel.
-// Bei DUPFINDER_FFMPEG_CONCURRENCY=16 laufen damit bis zu 16×8 Decoder-Kontexte
-// gleichzeitig auf der GPU — das kann NVDEC-Sessions/VRAM übersättigen und den
-// Durchsatz wieder drücken. Für den GPU-Single-Call daher mit NIEDRIGEREN Werten
-// testen (z. B. set DUPFINDER_FFMPEG_CONCURRENCY=4 … 8) und hochtasten.
+// TUNING (important when measuring): one process now drives one NVDEC decode
+// per frame in parallel. With DUPFINDER_FFMPEG_CONCURRENCY=16 that is up to 16
+// times as many decoder contexts on the GPU at once, which can oversaturate
+// NVDEC sessions or VRAM and lower the throughput again. For the GPU single
+// call, test with LOWER values (e.g. set DUPFINDER_FFMPEG_CONCURRENCY=4 to 8) and go up.
 func multiInputExtractHashes(ffmpegPath string, vi *videoInfo, durSec float64,
 	hashDir string, useGPU bool, indices []int) bool {
 
 	args := []string{"-hide_banner", "-loglevel", "error"}
 	if useGPU {
-		// EINMALIGE CUDA-Device-Init; alle Inputs referenzieren dieses Device.
+		// Initialise the CUDA device ONCE; every input refers to it.
 		args = append(args, "-init_hw_device", "cuda:0=gpu")
 	}
 
-	// Ein Input pro angefordertem Sample-Index (Input-Seek zum Ziel-Timestamp).
+	// One input per requested sample index (input seek to the target time).
 	for _, idx := range indices {
 		ts := durSec * samplePositions[idx]
 		if useGPU {
 			args = append(args, "-hwaccel", "cuda", "-hwaccel_device", "gpu")
 		}
 		if fastSeek {
-			// Nur zum nächstgelegenen Keyframe springen (kein Präzisions-Decode).
+			// Jump to the nearest keyframe only (no precise decoding).
 			args = append(args, "-noaccurate_seek")
 		}
 		args = append(args, "-ss", fmt.Sprintf("%.3f", ts), "-i", vi.Path)
 	}
 
-	// Ein Output pro Input: je 1 Frame, 32x32 Graustufen, als PGM.
+	// One output per input: 1 frame each, 32x32 grey, as PGM.
 	for n, idx := range indices {
 		out := filepath.Join(hashDir, fmt.Sprintf("multi_h%d.pgm", idx))
 		args = append(args,
@@ -1474,17 +1258,17 @@ func multiInputExtractHashes(ffmpegPath string, vi *videoInfo, durSec float64,
 		gotAny = true
 		count++
 	}
-	// Akzeptiert, wenn mind. die Hälfte der ANGEFORDERTEN Frames da sind.
+	// Accepted when at least half of the REQUESTED frames are there.
 	return gotAny && count >= (len(indices)+1)/2
 }
 
-// singleExtractHashes – Two-Stage-Seek pro Frame, parallel. Bei langen Videos
-// massiv schneller als Bulk, weil jeder Aufruf direkt zum Keyframe springt.
+// singleExtractHashes: two-stage seek per frame, in parallel. For long
+// videos far faster than bulk, since every call jumps straight to the keyframe.
 func singleExtractHashes(ffmpegPath string, vi *videoInfo, durSec float64, hashDir string) {
 	var wg sync.WaitGroup
 	for i, p := range samplePositions {
 		if vi.Hashes[i] != 0 {
-			continue // bereits durch Bulk-Versuch gesetzt
+			continue // set by the bulk attempt already
 		}
 		ts := durSec * p
 		wg.Add(1)
@@ -1508,8 +1292,8 @@ func extractSingleHashFrame(ffmpegPath, videoPath string, ts float64, idx int,
 			args = append(args, "-hwaccel", "cuda")
 		}
 		if fastSeek {
-			// Schnell: nur Input-Seek zum Keyframe nahe ts, KEIN Praezisions-Decode
-			// bis zum exakten Frame. Spart pro Sample den ~postSeek-langen Decode.
+			// Fast: input seek to the keyframe near ts only, NO precise decoding to
+			// the exact frame. Saves the decode of about postSeek per sample.
 			args = append(args,
 				"-ss", fmt.Sprintf("%.3f", ts),
 				"-noaccurate_seek",
@@ -1520,8 +1304,8 @@ func extractSingleHashFrame(ffmpegPath, videoPath string, ts float64, idx int,
 				"-f", "image2", "-y", hashOut,
 			)
 		} else {
-			// Genau (Default): Two-Stage-Seek, dekodiert ~postSeek Sekunden bis
-			// zum exakten Ziel-Frame. Robuster bei unterschiedlich enkodierten Kopien.
+			// Exact: two-stage seek, decodes about postSeek seconds up to the exact
+			// target frame. More robust for copies encoded differently.
 			if preSeek > 0 {
 				args = append(args, "-ss", fmt.Sprintf("%.3f", preSeek))
 			}
@@ -1552,7 +1336,7 @@ func extractSingleHashFrame(ffmpegPath, videoPath string, ts float64, idx int,
 }
 
 // ============================================================================
-// THUMB-PHASE: gleiche Hybrid-Strategie
+// THUMBNAIL PHASE: the same hybrid strategy
 // ============================================================================
 
 func computeThumbsForVideos(state *appState, videos []*videoInfo, thumbDir string,
@@ -1563,7 +1347,7 @@ func computeThumbsForVideos(state *appState, videos []*videoInfo, thumbDir strin
 	for _, v := range videos {
 		if allThumbsExist(thumbDir, v.Path) {
 			counter.Add(1)
-			updateProgress(state, "Thumbnails", int(counter.Load()), total, "Erstelle Vorschauen…")
+			updateProgress(state, "Thumbnails", int(counter.Load()), total, "Making previews...")
 			continue
 		}
 		if isShutdownRequested() {
@@ -1577,7 +1361,7 @@ func computeThumbsForVideos(state *appState, videos []*videoInfo, thumbDir strin
 			processVideoThumbs(state.binaries.ffmpeg, vi, thumbDir)
 			cur := counter.Add(1)
 			if cur%5 == 0 || int(cur) == total {
-				updateProgress(state, "Thumbnails", int(cur), total, "Erstelle Vorschauen…")
+				updateProgress(state, "Thumbnails", int(cur), total, "Making previews...")
 			}
 		}(v)
 	}
@@ -1600,7 +1384,7 @@ func processVideoThumbs(ffmpegPath string, vi *videoInfo, thumbDir string) {
 		}
 	}
 
-	// Lange Videos ODER Bulk-Fallback: Single-Calls
+	// Long videos OR bulk fallback: single calls
 	singleExtractThumbs(ffmpegPath, vi, durSec, thumbDir, thumbPrefix)
 }
 
@@ -1646,7 +1430,7 @@ func bulkExtractThumbs(ffmpegPath, videoPath string, durSec float64,
 		"-i", videoPath,
 		"-an", "-sn", "-dn",
 		"-vf", vfilter,
-		"-vsync", "0",
+		"-fps_mode", "passthrough", // was -vsync 0: no longer in the FFmpeg 9.0 manual, -fps_mode exists since 5.1
 		"-frames:v", fmt.Sprintf("%d", len(thumbIndices)),
 		"-q:v", "5",
 		"-f", "image2",
@@ -1682,7 +1466,7 @@ func singleExtractThumbs(ffmpegPath string, vi *videoInfo, durSec float64,
 		}
 		dst := filepath.Join(thumbDir, fmt.Sprintf("%s_%d.jpg", thumbPrefix, idx))
 		if st, err := os.Stat(dst); err == nil && st.Size() > 0 {
-			continue // schon da
+			continue // there already
 		}
 		ts := durSec * samplePositions[idx]
 		wg.Add(1)
@@ -1727,18 +1511,21 @@ func extractSingleThumbFrame(ffmpegPath, videoPath string, ts float64, idx int,
 
 	err := runOnce(useHwAccel)
 	if err != nil && useHwAccel {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		err = runOnce(false)
 	}
 	if err != nil {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		return
 	}
 	if st, err := os.Stat(tmpThumb); err != nil || st.Size() == 0 {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		return
 	}
-	_ = os.Rename(tmpThumb, finalThumb)
+	if err := os.Rename(tmpThumb, finalThumb); err != nil {
+		// The page shows an empty frame for it; the next scan tries again.
+		slog.Warn("thumbnail not saved", "file", finalThumb, "err", err)
+	}
 }
 
 // ============================================================================
@@ -1764,7 +1551,7 @@ func allThumbsExist(thumbDir, videoPath string) bool {
 }
 
 // ============================================================================
-// Confirmed Clusters
+// Confirmed groups
 // ============================================================================
 
 func buildConfirmedClusters(clusters []cluster, extraPairs [][2]*videoInfo, ignored *ignoreList) []*clusterState {
@@ -1776,7 +1563,7 @@ func buildConfirmedClusters(clusters []cluster, extraPairs [][2]*videoInfo, igno
 			pairs = append(pairs, pair{cl.videos[m[0]], cl.videos[m[1]]})
 		}
 	}
-	// V6 — bereits pHash-bestätigte Dateiname-Bridge-Paare (cluster-übergreifend).
+	// File name bridge pairs already confirmed by pHash (across groups).
 	for _, bp := range extraPairs {
 		pairs = append(pairs, pair{bp[0], bp[1]})
 	}
@@ -1808,7 +1595,7 @@ func buildConfirmedClusters(clusters []cluster, extraPairs [][2]*videoInfo, igno
 
 	var result []*clusterState
 	for _, vs := range groups {
-		// 1. Alle ignorierten Videos aus der Liste werfen
+		// 1. Drop every ignored video from the list
 		var validVs []*videoInfo
 		for _, v := range vs {
 			if !ignored.has(v.Path) {
@@ -1816,12 +1603,12 @@ func buildConfirmedClusters(clusters []cluster, extraPairs [][2]*videoInfo, igno
 			}
 		}
 
-		// 2. Wenn nach dem Rauswurf weniger als 2 Videos übrig sind, ist es kein Duplikat mehr
+		// 2. With fewer than 2 videos left after that, it is no duplicate any more
 		if len(validVs) < 2 {
 			continue
 		}
 
-		// 3. Mit den verbleibenden Videos weitermachen
+		// 3. Go on with the remaining videos
 		vs = validVs
 
 		sort.Slice(vs, func(i, j int) bool {

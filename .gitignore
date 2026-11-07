@@ -1,25 +1,41 @@
-# ── Heruntergeladene Tools (werden zur Laufzeit geladen, nicht mitliefern) ──
-/bin/
+# --- Secrets: never commit (dev-starterkit 08-sicherheit.md) ---
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
 
-# ── Laufzeit-/Programmdaten (enthält echte Dateipfade!) ──
-/.DupFinder.data/
-
-# ── Gebaute Programmdateien (gehören als Release-Asset, nicht ins Repo) ──
+# --- Build output: belongs to a release, not to the repository ---
 *.exe
 /dupfinder
-
-# ── Lokale Sicherungen / Start-/Test-Skripte (private Pfade) ──
-/_backup_*/
-*.bat
-
-# ── Interne Notizen / Arbeitsanweisungen (nicht öffentlich) ──
-/_claude_memory/
-CLAUDE.md
-README_BUILD.txt
-
-# ── Sonstiges ──
-*.log
-*.tmp
-
-# ── Windows-Ressourcen (Versionsinfo), erzeugt vom Release-Workflow aus winres/winres.json ──
+/DupFinder
+# go-winres output, made by the release workflow from winres/winres.json
 *.syso
+*.test
+
+# --- Files the program writes when started from here ---
+# FFmpeg, downloaded at runtime, never shipped
+/bin/
+# Runtime data: holds real file paths
+/.DupFinder.data/
+*.log
+*.log.[0-9]
+*.tmp
+*.part
+
+# --- Private notes, local start scripts and safety copies: never public ---
+# Local start scripts carry private paths
+*.bat
+_notizen/
+/_claude_memory/
+README_BUILD.txt
+_backup*/
+
+# --- Editors and operating systems ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

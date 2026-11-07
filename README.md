@@ -46,12 +46,12 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 
 ## ✨ What DupFinder does
 
-- 🧠 **Content-based, not name-based.** It samples a handful of frames per video and compares them with a perceptual hash (pHash). That catches duplicates even across **different containers, resolutions or re-encodes** — not just byte-identical copies (though those are detected too, without decoding).
+- 🧠 **Content-based, not name-based.** It samples a handful of frames per video and compares them with a perceptual hash (pHash). That catches duplicates even across **different containers, resolutions or re-encodes**, not just byte-identical copies (though those are detected too, without decoding).
 - 🪟 **Local web UI.** Side-by-side comparison of each group: thumbnails, size, bitrate, resolution, codec and duration. The best value per column is highlighted, and the largest file is pre-selected as "keep".
 - ⌨️ **Fast keyboard review.** Walk through groups and decide in seconds (see shortcuts below).
 - 🛡️ **Safe with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), never a hard delete. Decisions are remembered between runs and can be undone.
-- 💾 **Cached.** Results are stored, so a second scan of the same files is near-instant — only new or changed files are re-examined.
-- 🔒 **Stays on your machine.** The UI is served on `localhost` only; nothing is uploaded anywhere.
+- 💾 **Cached.** Results are stored, so a second scan of the same files is near-instant: only new or changed files are re-examined.
+- 🔒 **Stays on your machine.** The UI is served on this computer only (`127.0.0.1`), protected by a one-time key; nothing is uploaded anywhere.
 
 ---
 
@@ -59,9 +59,18 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 
 ```
 DupFinder.exe <folder> [more folders ...]
+DupFinder.exe -version
 ```
 
-The web UI runs at `http://localhost:8765` (the next free port is used if that one is busy) and opens by itself.
+You can also drag one or more folders onto `DupFinder.exe`. End DupFinder with **Quit** in the page or `Ctrl+C` in its window.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Ended normally (Quit or `Ctrl+C`) |
+| `1` | No folder given |
+| `2` | Could not start; the message says why and what to do |
+
+The web UI opens by itself at `http://127.0.0.1:8765` (the next free port is used if that one is busy). The link DupFinder opens carries a one-time key, new on every start: only that browser can use the UI, other web pages cannot reach it. If you close the tab, open the link shown in the DupFinder window again.
 
 ### Keyboard shortcuts
 
@@ -88,6 +97,24 @@ DupFinder runs fine with no configuration. For large libraries you can tweak:
 | `DUPFINDER_FAST_SEEK` | on | Jump straight to the nearest keyframe when sampling frames (fastest). Set to `0` for slower, frame-accurate seeking. |
 | `DUPFINDER_HWACCEL` | off | Decode on the GPU (NVDEC). Often **slower** than CPU for this short-sample workload; off by default. |
 | `DUPFINDER_FFMPEG_CONCURRENCY` | CPU cores | Number of parallel FFmpeg processes. Raise on fast SSD/NVMe, lower for a single mechanical disk. |
+| `DUPFINDER_HOME` | folder of the EXE | Keep `bin` and `.DupFinder.data` in another folder (for tests and special setups). |
+
+---
+
+## 📁 Where the files are
+
+Everything stays next to `DupFinder.exe`, so DupFinder is portable: copy or delete the folder and it is gone.
+
+| Path | What |
+|---|---|
+| `bin\ffmpeg.exe`, `bin\ffprobe.exe` | FFmpeg, downloaded on first run (or your own copy) |
+| `.DupFinder.data\cache.json` | What DupFinder learned about each video, so a second scan is fast. Safe to delete. |
+| `.DupFinder.data\ignored.json` | Files you chose to **Ignore** |
+| `.DupFinder.data\session.json` | Groups you decided already |
+| `.DupFinder.data\thumbs\` | Preview images |
+| `.DupFinder.data\dupfinder.log` | Log file, at most 2 MB plus three older parts (`.log.1` to `.log.3`) |
+
+If one of the JSON files cannot be read (e.g. after a power failure), DupFinder keeps it as `<name>.broken-<date>` next to it, says so, and starts without it. Because the data lives next to the EXE, put `DupFinder.exe` into a folder you may write to (not `C:\Program Files`).
 
 ---
 
@@ -121,19 +148,19 @@ If SmartScreen blocks the start: click **"More info" → "Run anyway"**.
 go build -o DupFinder.exe .
 ```
 
-Requires Go 1.22+. FFmpeg is **not** needed to build — it is downloaded at runtime, never embedded.
+Requires Go 1.27.3, the version in `go.mod` (any Go from 1.21 on fetches it by itself). FFmpeg is **not** needed to build: it is downloaded at runtime, never embedded. A local build calls itself `dev`; `go test ./...` runs the tests.
 
-Releases are built by the [release workflow](.github/workflows/release.yml) on GitHub: push a tag `vX.Y.Z` equal to `appVersion` in `main.go`. It also writes name and version into the file properties (from [`winres/winres.json`](winres/winres.json)) and, once code signing is switched on, has the exe signed: see [`.signpath/README.md`](.signpath/README.md). "Run workflow" with "dry run" ticked builds and checks everything without publishing.
+Releases are built by the [release workflow](.github/workflows/release.yml) on GitHub: write `.github/release-notes/X.Y.Z.md`, then push a tag `vX.Y.Z`. The version comes from the tag only (a local build says `dev`); the release carries `DupFinder.exe` and `SHA256SUMS.txt`. It also writes name and version into the file properties (from [`winres/winres.json`](winres/winres.json)) and, once code signing is switched on, has the exe signed: see [`.signpath/README.md`](.signpath/README.md). "Run workflow" with "dry run" ticked builds and checks everything without publishing.
 
 ---
 
 ## 📜 License
 
-DupFinder is free software under the [GNU General Public License, version 3](LICENSE) — that version only (`GPL-3.0-only`).
+DupFinder is free software under the [GNU General Public License, version 3](LICENSE), that version only (`GPL-3.0-only`).
 
 - **Use it:** Anyone may use DupFinder free of charge, at home or at work, and read, change and share its source code.
-- **The one condition:** Whoever passes on DupFinder or parts of it — unchanged, changed or built into a program of their own — must include the complete source code and pass everything on under the same license. A closed, paid product with DupFinder inside is therefore not possible.
-- **Free of charge:** DupFinder is and stays free. The official source is [github.com/burnersen/DupFinder](https://github.com/burnersen/DupFinder) — anyone asking money for DupFinder is selling you what you can get here for free.
+- **The one condition:** Whoever passes on DupFinder or parts of it (unchanged, changed or built into a program of their own) must include the complete source code and pass everything on under the same license. A closed, paid product with DupFinder inside is therefore not possible.
+- **Free of charge:** DupFinder is and stays free. The official source is [github.com/burnersen/DupFinder](https://github.com/burnersen/DupFinder): anyone asking money for DupFinder is selling you what you can get here for free.
 
 Versions up to and including 1.0.1 were released under the PolyForm Noncommercial License 1.0.0; every later version is under the GPLv3.
 
@@ -143,22 +170,22 @@ What is signed, who approves it and what DupFinder sends over the network (only 
 
 ### FFmpeg
 
-DupFinder does **not** bundle FFmpeg. On first run it downloads an official static build from the [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) project onto your machine, or you provide your own copy. FFmpeg is a separate work by the [FFmpeg project](https://ffmpeg.org) under its own license; DupFinder invokes it as an external program.
+DupFinder does **not** bundle FFmpeg. On first run it downloads one fixed static build from the [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) project onto your machine (about 190 MB, pinned by size and SHA-256 in [`runtime.json`](runtime.json), mirrored in the release [`runtime-v1`](https://github.com/burnersen/DupFinder/releases/tag/runtime-v1)), or you provide your own copy. FFmpeg is a separate work by the [FFmpeg project](https://ffmpeg.org) under its own license; DupFinder invokes it as an external program.
 
 ---
 
 ## 💬 Feedback & contributions
 
-Found a bug or have a feature wish? Please open an issue on the [GitHub repository](https://github.com/burnersen/DupFinder/issues) — feedback is genuinely welcome. Forks and pull requests are too.
+Found a bug or have a feature wish? Please open an issue on the [GitHub repository](https://github.com/burnersen/DupFinder/issues); feedback is genuinely welcome. Forks and pull requests are too.
 
 ---
 
 ## ☕ Support
 
-DupFinder is free and made in my spare time. If it saved you some disk space and you'd like to say thanks, you can [buy me a coffee on Ko-fi](https://ko-fi.com/burnersen). Completely optional — and thank you!
+DupFinder is free and made in my spare time. If it saved you some disk space and you'd like to say thanks, you can [buy me a coffee on Ko-fi](https://ko-fi.com/burnersen). Completely optional, and thank you!
 
 ---
 
 ## ⚠️ Disclaimer
 
-DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care — deleted files go to the recycle bin, not a permanent delete — but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See sections 15 and 16 of the [license](LICENSE).
+DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care (deleted files go to the recycle bin, not a permanent delete), but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See sections 15 and 16 of the [license](LICENSE).

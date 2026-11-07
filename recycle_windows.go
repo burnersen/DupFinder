@@ -16,15 +16,15 @@ import (
 )
 
 // ============================================================================
-// Papierkorb-Löschung
+// Moving to the recycle bin
 //
-// Primärweg: IFileOperation (COM, ab Windows Vista). Microsofts empfohlener
-// Ersatz für SHFileOperation; unterstützt Pfade weit über MAX_PATH (260 Zeichen)
-// hinaus – wichtig für tief verschachtelte Videoordner.
+// Main way: IFileOperation (COM, since Windows Vista). Microsoft's recommended
+// replacement for SHFileOperation; handles paths far beyond MAX_PATH (260
+// characters), which matters for deeply nested video folders.
 //
-// Fallback: das bewährte SHFileOperation. Greift, falls COM nicht verfügbar ist
-// oder IFileOperation einen Fehler liefert. Für normale (kurze) Pfade voll
-// funktionsfähig, sodass nie Funktionalität verloren geht.
+// Fallback: the proven SHFileOperation, used if COM is not available or
+// IFileOperation fails. Fully working for normal (short) paths, so no
+// function is ever lost.
 // ============================================================================
 
 const (
@@ -35,9 +35,9 @@ const (
 	FOF_NOCONFIRMMKDIR = 0x0200
 	FOF_NOERRORUI      = 0x0400
 
-	// IFileOperation-spezifische Flags
+	// Flags of IFileOperation
 	FOF_NO_UI            = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_NOCONFIRMMKDIR
-	FOFX_RECYCLEONDELETE = 0x00080000 // DeleteItem → Papierkorb statt endgültig (Win8+)
+	FOFX_RECYCLEONDELETE = 0x00080000 // DeleteItem goes to the recycle bin, not permanent (Win8+)
 	FOFX_EARLYFAILURE    = 0x00100000
 
 	// CoInitializeEx / CoCreateInstance
@@ -83,8 +83,8 @@ var (
 	procCoCreate       = ole32.NewProc("CoCreateInstance")
 )
 
-// moveToRecycleBin löscht path in den Papierkorb. Erst der moderne, long-path-
-// fähige Weg; bei jedem Fehler automatischer Rückfall auf SHFileOperation.
+// moveToRecycleBin moves path to the recycle bin: the modern way that handles
+// long paths first, and on any error the SHFileOperation fallback.
 func moveToRecycleBin(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -94,15 +94,15 @@ func moveToRecycleBin(path string) error {
 	if err := recycleViaIFileOperation(absPath); err == nil {
 		return nil
 	}
-	// Fallback – bewährter Legacy-Weg (MAX_PATH-begrenzt, aber stabil).
+	// Fallback: the proven legacy way (limited to MAX_PATH, but stable).
 	return recycleViaSHFileOperation(absPath)
 }
 
 // ----------------------------------------------------------------------------
-// Primärweg: IFileOperation (COM)
+// Main way: IFileOperation (COM)
 // ----------------------------------------------------------------------------
 
-// vtable-Indizes von IFileOperation (erbt IUnknown: QI=0, AddRef=1, Release=2).
+// vtable indices of IFileOperation (inherits IUnknown: QI=0, AddRef=1, Release=2).
 const (
 	idxRelease           = 2  // IUnknown::Release
 	idxSetOperationFlags = 5  // IFileOperation::SetOperationFlags
@@ -111,19 +111,19 @@ const (
 )
 
 func recycleViaIFileOperation(absPath string) error {
-	// COM braucht einen festen OS-Thread (Apartment-Modell).
+	// COM needs a fixed OS thread (apartment model).
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	hr, _, _ := procCoInitializeEx.Call(0, COINIT_APARTMENTTHREADED)
-	// S_OK(0) und S_FALSE(1) = ok (S_FALSE: bereits initialisiert). RPC_E_
-	// CHANGED_MODE(0x80010106) = anderer Modus aktiv, dann KEIN Uninit aufrufen.
+	// S_OK (0) and S_FALSE (1) are fine (S_FALSE: initialised already).
+	// RPC_E_CHANGED_MODE (0x80010106): another mode is active, then do NOT uninitialise.
 	const rpcChangedMode = 0x80010106
 	if uint32(hr) != rpcChangedMode {
 		defer procCoUninit.Call()
 	}
 
-	// IFileOperation-Instanz erzeugen.
+	// Create the IFileOperation instance.
 	var pfo unsafe.Pointer
 	hr, _, _ = procCoCreate.Call(
 		uintptr(unsafe.Pointer(&clsidFileOperation)),
@@ -137,20 +137,20 @@ func recycleViaIFileOperation(absPath string) error {
 	}
 	defer release(pfo)
 
-	// In den Papierkorb statt endgültig löschen, ohne UI/Rückfragen.
+	// To the recycle bin instead of deleting for good, without UI or questions.
 	if hr := callMethod(pfo, idxSetOperationFlags,
 		uintptr(FOF_NO_UI|FOF_ALLOWUNDO|FOFX_RECYCLEONDELETE|FOFX_EARLYFAILURE)); int32(hr) < 0 {
 		return fmt.Errorf("SetOperationFlags hr=0x%x", uint32(hr))
 	}
 
-	// IShellItem aus dem Pfad bauen (long-path-fähig).
+	// Build the IShellItem from the path (handles long paths).
 	psi, err := shellItemFromPath(absPath)
 	if err != nil {
 		return err
 	}
 	defer release(psi)
 
-	// DeleteItem(psi, NULL) – psi wird als reines Aufruf-Argument übergeben.
+	// DeleteItem(psi, NULL): psi is passed as a plain argument.
 	if hr := callMethod(pfo, idxDeleteItem, uintptr(psi), 0); int32(hr) < 0 {
 		return fmt.Errorf("DeleteItem hr=0x%x", uint32(hr))
 	}
@@ -161,13 +161,13 @@ func recycleViaIFileOperation(absPath string) error {
 	return nil
 }
 
-// shellItemFromPath erzeugt ein IShellItem. Bei sehr langen Pfaden wird das
-// \\?\-Präfix vorangestellt, damit die MAX_PATH-Parser-Grenze umgangen wird.
+// shellItemFromPath creates an IShellItem. Very long paths get the \\?\
+// prefix, which gets around the MAX_PATH limit of the parser.
 func shellItemFromPath(absPath string) (unsafe.Pointer, error) {
 	parse := absPath
 	if len(absPath) >= 240 && !strings.HasPrefix(absPath, `\\?\`) {
 		if strings.HasPrefix(absPath, `\\`) {
-			parse = `\\?\UNC\` + absPath[2:] // UNC-Netzwerkpfad
+			parse = `\\?\UNC\` + absPath[2:] // UNC network path
 		} else {
 			parse = `\\?\` + absPath
 		}
@@ -190,13 +190,13 @@ func shellItemFromPath(absPath string) (unsafe.Pointer, error) {
 	return psi, nil
 }
 
-// callMethod ruft die Methode an vtable[index] eines COM-Objekts auf.
-// this zeigt auf das COM-Objekt, args sind die Argumente NACH dem this-Zeiger.
-// this wird als unsafe.Pointer geführt (nicht als uintptr), damit die Zeiger-
-// Arithmetik über unsafe.Add läuft und `go vet` keine „misuse of unsafe.Pointer"
-// meldet. Die Speicheroperationen sind identisch zu vorher.
+// callMethod calls the method at vtable[index] of a COM object. this points
+// to the COM object, args are the arguments AFTER the this pointer. this is
+// kept as unsafe.Pointer (not uintptr), so the pointer arithmetic goes
+// through unsafe.Add and go vet reports no "misuse of unsafe.Pointer". The
+// memory operations are the same as before.
 func callMethod(this unsafe.Pointer, index int, args ...uintptr) uintptr {
-	vtbl := *(*unsafe.Pointer)(this) // erstes Feld = Zeiger auf die vtable
+	vtbl := *(*unsafe.Pointer)(this) // first field: pointer to the vtable
 	fn := *(*uintptr)(unsafe.Add(vtbl, uintptr(index)*unsafe.Sizeof(uintptr(0))))
 	call := append([]uintptr{uintptr(this)}, args...)
 	r, _, _ := syscall.SyscallN(fn, call...)
@@ -210,11 +210,11 @@ func release(this unsafe.Pointer) {
 }
 
 // ----------------------------------------------------------------------------
-// Fallback: SHFileOperation (Legacy, MAX_PATH-begrenzt)
+// Fallback: SHFileOperation (legacy, limited to MAX_PATH)
 // ----------------------------------------------------------------------------
 
 func recycleViaSHFileOperation(absPath string) error {
-	// Die alte Shell-API versteht das \\?\-Langpfad-Präfix NICHT.
+	// The old shell API does NOT understand the \\?\ long path prefix.
 	cleanPath := strings.TrimPrefix(absPath, `\\?\`)
 
 	utf16Path, err := syscall.UTF16FromString(cleanPath)
@@ -231,7 +231,7 @@ func recycleViaSHFileOperation(absPath string) error {
 	ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
 	runtime.KeepAlive(utf16Path)
 	if ret != 0 {
-		return fmt.Errorf("SHFileOperation: code=%d (Pfad evtl. zu lang oder Laufwerk ohne Papierkorb-Support)", ret)
+		return fmt.Errorf("SHFileOperation: code=%d (path too long, or a drive without recycle bin)", ret)
 	}
 	if op.fAnyOperationsAborted != 0 {
 		return fmt.Errorf("operation aborted")

@@ -1,3 +1,3 @@
-module dupfinder
+module github.com/burnersen/DupFinder
 
-go 1.22
+go 1.27.3

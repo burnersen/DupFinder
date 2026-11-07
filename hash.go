@@ -14,7 +14,7 @@ import (
 
 func parsePGM(data []byte) ([]byte, error) {
 	if len(data) < 6 || data[0] != 'P' || data[1] != '5' {
-		return nil, fmt.Errorf("kein P5 PGM")
+		return nil, fmt.Errorf("not a P5 PGM")
 	}
 	idx := 2
 
@@ -59,12 +59,15 @@ func parsePGM(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, _ := strconv.Atoi(wTok)
-	h, _ := strconv.Atoi(hTok)
-	maxv, _ := strconv.Atoi(mTok)
+	w, errW := strconv.Atoi(wTok)
+	h, errH := strconv.Atoi(hTok)
+	maxv, errM := strconv.Atoi(mTok)
+	if errW != nil || errH != nil || errM != nil || w <= 0 || h <= 0 || maxv <= 0 {
+		return nil, fmt.Errorf("bad PGM header %q %q %q", wTok, hTok, mTok)
+	}
 
 	if idx >= len(data) {
-		return nil, fmt.Errorf("kein body")
+		return nil, fmt.Errorf("no pixel data")
 	}
 	idx++
 
@@ -113,13 +116,13 @@ func computePHash(pixels []byte) uint64 {
 	return hash
 }
 
-// dctSize ist die Kantenlänge der Graustufen-Matrix, über die der pHash-DCT läuft.
+// dctSize is the edge length of the grey matrix the pHash DCT runs over.
 const dctSize = 32
 
-// dctCosTable hält die DCT-Cosinus-Koeffizienten für dctSize. Sie hängen NUR von
-// der Größe ab, sind also für jeden Frame identisch und werden einmal beim
-// Programmstart berechnet statt pro Frame neu — das spart in der Hash-Schleife
-// jeweils dctSize*dctSize math.Cos-Aufrufe.
+// dctCosTable holds the DCT cosine coefficients for dctSize. They depend ONLY
+// on the size, so they are the same for every frame and are computed once
+// at start instead of per frame, which saves dctSize*dctSize math.Cos calls
+// in the hash loop each time.
 var dctCosTable = makeDCTCosTable(dctSize)
 
 func makeDCTCosTable(n int) []float64 {
@@ -133,8 +136,8 @@ func makeDCTCosTable(n int) []float64 {
 }
 
 func dct2D(src []float64, N int) []float64 {
-	// Schnellpfad: vorberechnete Tabelle für die übliche Größe. Andere Größen
-	// (aktuell nicht genutzt) berechnen sich weiterhin ad hoc → bleibt robust.
+	// Fast path: the precomputed table for the usual size. Other sizes (not
+	// used at the moment) are computed on the fly, so it stays correct.
 	cos := dctCosTable
 	if N != dctSize {
 		cos = makeDCTCosTable(N)

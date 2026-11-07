@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "ffmpeg": {
+    "name": "FFmpeg n9.0.2-47-gb204e94e90",
+    "file": "ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip",
+    "size": 195293261,
+    "sha256": "8436c89156c3695659bf968e26bab5b08351ed8c86c3e9dbe3d6cc66a23af0a8",
+    "license": "GPL-3.0-or-later",
+    "build": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-11-06-12-50",
+    "source": "https://github.com/FFmpeg/FFmpeg/tree/b204e94e90",
+    "urls": [
+      "https://github.com/burnersen/DupFinder/releases/download/runtime-v1/ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip",
+      "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-06-12-50/ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip"
+    ]
+  }
+}

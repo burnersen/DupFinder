@@ -5,10 +5,10 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,21 +17,41 @@ import (
 	"time"
 )
 
+// recycle moves a file to the recycle bin. A variable so tests can see what
+// would be moved without touching the recycle bin.
+var recycle = moveToRecycleBin
+
 type server struct {
 	state      *appState
 	cacheFile  string
 	ignoreFile string
+	guard      *webGuard
 	httpSrv    *http.Server
+	out        *output // console; nil in tests
 }
 
-func newServer(state *appState, cacheFile, ignoreFile string) *server {
-	return &server{state: state, cacheFile: cacheFile, ignoreFile: ignoreFile}
+func newServer(state *appState, cacheFile, ignoreFile string, guard *webGuard) *server {
+	return &server{state: state, cacheFile: cacheFile, ignoreFile: ignoreFile, guard: guard}
 }
 
-func (s *server) run(port int) error {
+func (s *server) run() error {
+	s.httpSrv = &http.Server{
+		Addr:         listenAddr(s.guard.port),
+		Handler:      s.handler(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+	}
+	return s.httpSrv.ListenAndServe()
+}
+
+// handler is the API behind the key and Host checks of webguard.go.
+func (s *server) handler() http.Handler { return s.guard.wrap(s.routes()) }
+
+// routes is the whole HTTP API; tests call it without a listening server.
+func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	webFS, _ := fs.Sub(webAssets, "web")
+	webFS, _ := fs.Sub(webAssets, "web") // ignore: "web" is embedded at build time, Sub cannot fail
 	mux.Handle("/", http.FileServer(http.FS(webFS)))
 
 	mux.HandleFunc("/api/state", s.handleState)
@@ -45,14 +65,7 @@ func (s *server) run(port int) error {
 	mux.HandleFunc("/api/shutdown", s.handleShutdown)
 	mux.HandleFunc("/api/play", s.handlePlay)
 	mux.HandleFunc("/api/reveal", s.handleReveal)
-
-	s.httpSrv = &http.Server{
-		Addr:         fmt.Sprintf("localhost:%d", port),
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-	}
-	return s.httpSrv.ListenAndServe()
+	return mux
 }
 
 // ============================================================================
@@ -97,7 +110,9 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	defer s.state.mu.RUnlock()
 
 	resp := stateResponse{
-		Roots:    append([]string(nil), s.state.roots...),
+		// Empty lists, never null: the page reads .length on both.
+		Roots:    append([]string{}, s.state.roots...),
+		Clusters: []clusterDTO{},
 		Scanning: s.state.scanning.Load(),
 	}
 	for _, cl := range s.state.clusters {
@@ -153,7 +168,7 @@ func (s *server) handleProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-// /api/events  – Server-Sent Events (Push statt Polling)
+// /api/events: Server-Sent Events (push instead of polling)
 // ============================================================================
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +178,12 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	rc := http.NewResponseController(w)
-	// WriteTimeout des Servers (60s) für DIESE Langläufer-Verbindung aufheben,
-	// sonst würde der Stream nach 60s abreißen.
-	_ = rc.SetWriteDeadline(time.Time{})
+	// Lift the server's WriteTimeout (60 s) for THIS long-running connection,
+	// or the stream would break off after 60 s.
+	_ = rc.SetWriteDeadline(time.Time{}) // ignore: not every writer supports it; the stream works without
 
 	write := func(event, data string) bool {
-		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second)) // ignore: as above
 		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 			return false
 		}
@@ -184,7 +199,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		s.state.progress.mu.Lock()
-		pb, _ := json.Marshal(map[string]any{
+		pb, _ := json.Marshal(map[string]any{ // ignore: strings and numbers always encode
 			"phase":    s.state.progress.Phase,
 			"current":  s.state.progress.Current,
 			"total":    s.state.progress.Total,
@@ -208,7 +223,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done(): // Client getrennt
 			return
-		case <-appCtx.Done(): // Shutdown – blockiert httpSrv.Shutdown nicht
+		case <-appCtx.Done(): // shutdown: does not block httpSrv.Shutdown
 			return
 		case <-ticker.C:
 		case <-heartbeat.C:
@@ -248,13 +263,25 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	var decided bool
+	var badDecision error
+	if cl != nil {
+		decided = cl.Decided
+		badDecision = checkDecisions(cl, req.Decisions)
+	}
 	s.state.mu.Unlock()
 
 	if cl == nil {
-		http.Error(w, "Cluster nicht gefunden", http.StatusNotFound)
+		http.Error(w, "Group not found", http.StatusNotFound)
 		return
 	}
-	if cl.Decided {
+	// Checked before anything happens: a decision may only name files of
+	// this group, so no request can send any other file to the recycle bin.
+	if badDecision != nil {
+		http.Error(w, badDecision.Error(), http.StatusBadRequest)
+		return
+	}
+	if decided {
 		http.Error(w, "Cluster bereits entschieden", http.StatusConflict)
 		return
 	}
@@ -263,7 +290,7 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 	for _, d := range req.Decisions {
 		switch d.Action {
 		case "delete":
-			if err := moveToRecycleBin(d.Path); err != nil {
+			if err := recycle(d.Path); err != nil {
 				deleteErrors = append(deleteErrors, fmt.Sprintf("%s: %v", d.Path, err))
 			}
 		case "ignore":
@@ -274,17 +301,42 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 	s.state.mu.Lock()
 	cl.Decided = true
 	cl.Decisions = req.Decisions
+	sessErr := saveSessionLocked(s.state)
 	s.state.mu.Unlock()
 	s.state.bumpVersion()
 
-	_ = s.state.ignored.save(s.ignoreFile)
-	s.saveSession()
+	problems := deleteErrors
+	problems = s.notSaved(problems, "the decision", sessErr)
+	problems = s.notSaved(problems, "the ignore list", s.state.ignored.save(s.ignoreFile))
 
 	resp := map[string]any{"ok": true}
-	if len(deleteErrors) > 0 {
-		resp["errors"] = deleteErrors
+	if len(problems) > 0 {
+		resp["errors"] = problems
 	}
 	writeJSON(w, resp)
+}
+
+// checkDecisions accepts only the known actions, and only for files that
+// belong to the group. The caller holds state.mu.
+func checkDecisions(cl *clusterState, decisions []decision) error {
+	for _, d := range decisions {
+		switch d.Action {
+		case "keep", "delete", "ignore":
+		default:
+			return fmt.Errorf("unknown action %q", d.Action)
+		}
+		known := false
+		for _, v := range cl.Videos {
+			if v.Path == d.Path {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("file is not part of this group: %s", d.Path)
+		}
+	}
+	return nil
 }
 
 // ============================================================================
@@ -319,17 +371,21 @@ func (s *server) handleUndo(w http.ResponseWriter, r *http.Request) {
 			}
 			cl.Decided = false
 			cl.Decisions = nil
-			s.saveSessionLocked()
-			_ = s.state.ignored.save(s.ignoreFile)
+			problems := s.notSaved(nil, "the decision", saveSessionLocked(s.state))
+			problems = s.notSaved(problems, "the ignore list", s.state.ignored.save(s.ignoreFile))
 			s.state.bumpVersion()
-			writeJSON(w, map[string]any{
+			resp := map[string]any{
 				"ok":   true,
-				"note": "Bereits gelöschte Dateien liegen im Windows-Papierkorb.",
-			})
+				"note": "Files deleted already are in the Windows recycle bin.",
+			}
+			if len(problems) > 0 {
+				resp["errors"] = problems
+			}
+			writeJSON(w, resp)
 			return
 		}
 	}
-	http.Error(w, "Cluster nicht gefunden", http.StatusNotFound)
+	http.Error(w, "Group not found", http.StatusNotFound)
 }
 
 // ============================================================================
@@ -353,12 +409,12 @@ func (s *server) handleAddRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No folder given", http.StatusBadRequest)
 		return
 	}
 	st, err := os.Stat(req.Path)
 	if err != nil || !st.IsDir() {
-		http.Error(w, "Verzeichnis nicht gefunden", http.StatusBadRequest)
+		http.Error(w, "Folder not found", http.StatusBadRequest)
 		return
 	}
 
@@ -385,11 +441,13 @@ func (s *server) handleRescan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.state.scanning.Load() {
-		http.Error(w, "Scan läuft bereits", http.StatusConflict)
+		http.Error(w, "A scan is running already", http.StatusConflict)
 		return
 	}
 	go func() {
-		_ = runFullScan(s.state, s.cacheFile)
+		if err := runFullScan(s.state, s.cacheFile); err != nil {
+			s.scanFailed(err)
+		}
 	}()
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -435,34 +493,35 @@ func (s *server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"ok": true})
 	go func() {
-		time.Sleep(200 * time.Millisecond)
-		fmt.Println("\nShutdown via Browser.")
-		shutdownRequested.Store(true)
-		appCancel() // laufende ffmpeg/ffprobe-Kindprozesse sofort abbrechen
-		// Harte Reißleine analog zum Signal-Handler, falls Shutdown/Cleanup hängt.
-		time.AfterFunc(4*time.Second, func() { os.Exit(0) })
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		// KEIN os.Exit(0): ListenAndServe kehrt mit ErrServerClosed zurück →
-		// main() läuft sauber zu Ende und die defers (u.a. bp.cleanup) löschen
-		// das Temp-Verzeichnis. Sonst bliebe pro UI-Beenden ein ffmpeg/ffprobe-
-		// Tempordner (~100-150 MB) liegen.
-		_ = s.httpSrv.Shutdown(ctx)
+		time.Sleep(200 * time.Millisecond) // the answer reaches the page first
+		if s.out != nil {
+			s.out.Info("Quit in the browser.")
+		}
+		stopApp("browser")
 	}()
+}
+
+// scanFailed reports a scan that stopped with an error. The page shows the
+// last progress message; the console and the log say why.
+func (s *server) scanFailed(err error) {
+	slog.Error("scan failed", "err", err)
+	if s.out != nil {
+		s.out.Error("The scan stopped: " + err.Error())
+	}
 }
 
 // ============================================================================
 // /api/play, /api/reveal
 // ============================================================================
 
-// requireJSON erzwingt Content-Type: application/json bei mutierenden Requests.
-// Schutz gegen CSRF: Eine fremde Website kann per HTML-Formular nur "simple"
-// Content-Types (text/plain, form-urlencoded) ohne CORS-Preflight senden.
-// Durch das Verlangen von application/json wird ein Preflight erzwungen, den
-// der Browser für cross-origin Requests blockiert. Liefert true, wenn ok.
+// requireJSON insists on Content-Type: application/json for changing requests.
+// Against CSRF: a foreign web page can send only "simple" content types
+// (text/plain, form-urlencoded) with an HTML form, without a CORS preflight.
+// Requiring application/json forces a preflight, which the browser blocks
+// for cross-origin requests. Returns true if all is well.
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
-	// Optionale Parameter wie "; charset=utf-8" zulassen.
+	// Allow parameters such as "; charset=utf-8".
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = ct[:i]
 	}
@@ -473,9 +532,9 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// pathIsKnown prüft, ob der angegebene Pfad zu einem Video gehört, das aktuell
-// im State bekannt ist. Damit verhindern wir Command-Injection / das Öffnen
-// beliebiger Pfade über das HTTP-API.
+// pathIsKnown checks that the path belongs to a video in the current state.
+// This keeps the HTTP API from opening arbitrary paths or being used for
+// command injection.
 func (s *server) pathIsKnown(p string) bool {
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
@@ -506,29 +565,29 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No file given", http.StatusBadRequest)
 		return
 	}
 	if !s.pathIsKnown(req.Path) {
-		http.Error(w, "Pfad nicht im aktuellen State", http.StatusForbidden)
+		http.Error(w, "File is not part of the current result", http.StatusForbidden)
 		return
 	}
 	if _, err := os.Stat(req.Path); err != nil {
-		http.Error(w, "Datei nicht gefunden", http.StatusNotFound)
+		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Kein cmd.exe: rundll32 FileProtocolHandler öffnet die Datei mit dem im
-	// Windows-Default registrierten Programm und umgeht das fehleranfällige
-	// cmd-Argument-Parsing (Zeichen wie & oder " können dort missinterpretiert
-	// werden). Pfad ist bereits über pathIsKnown abgesichert.
+	// No cmd.exe: rundll32 FileProtocolHandler opens the file with the program
+	// registered in Windows and avoids cmd's error-prone argument parsing
+	// (characters such as & or " can be misread there). The path is checked
+	// by pathIsKnown already.
 	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", req.Path)
 	if err := cmd.Start(); err != nil {
-		http.Error(w, "Konnte Player nicht starten: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Could not start the player: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Reaper-Goroutine: vermeidet Zombie-Prozesse und gibt Handles frei.
-	go func() { _ = cmd.Wait() }()
+	// Reaper goroutine: avoids zombie processes and frees handles.
+	go func() { _ = cmd.Wait() }() // ignore: only reaps the process; the player's exit code means nothing here
 
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -550,80 +609,44 @@ func (s *server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = strings.TrimSpace(req.Path)
 	if req.Path == "" {
-		http.Error(w, "Pfad leer", http.StatusBadRequest)
+		http.Error(w, "No file given", http.StatusBadRequest)
 		return
 	}
 	if !s.pathIsKnown(req.Path) {
-		http.Error(w, "Pfad nicht im aktuellen State", http.StatusForbidden)
+		http.Error(w, "File is not part of the current result", http.StatusForbidden)
 		return
 	}
 	if _, err := os.Stat(req.Path); err != nil {
-		http.Error(w, "Datei nicht gefunden", http.StatusNotFound)
+		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Öffnet den enthaltenden Ordner und markiert die Datei. Die plattform-
-	// spezifische Umsetzung (inkl. korrekter Anführungszeichen für /select)
-	// steckt in reveal_windows.go bzw. reveal_other.go.
+	// Opens the containing folder and selects the file. The platform
+	// specific part (including the right quoting for /select) is in
+	// reveal_windows.go and reveal_other.go.
 	if err := revealInExplorer(req.Path); err != nil {
-		http.Error(w, "Konnte Explorer nicht starten: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Could not start Explorer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// ============================================================================
-// Session
-// ============================================================================
-
-type sessionEntry struct {
-	Decided   bool       `json:"decided"`
-	Decisions []decision `json:"decisions"`
-}
-
-type sessionData struct {
-	Clusters map[string]sessionEntry `json:"clusters"`
-}
-
-func (s *server) saveSession() {
-	s.state.mu.RLock()
-	defer s.state.mu.RUnlock()
-	s.saveSessionLocked()
-}
-
-func (s *server) saveSessionLocked() {
-	sess := sessionData{Clusters: map[string]sessionEntry{}}
-	for _, cl := range s.state.clusters {
-		if cl.Decided {
-			sess.Clusters[cl.ID] = sessionEntry{Decided: cl.Decided, Decisions: cl.Decisions}
-		}
+// notSaved reports a file that could not be written: in the answer to the
+// page (which shows it), in the console and in the log.
+func (s *server) notSaved(problems []string, what string, err error) []string {
+	if err == nil {
+		return problems
 	}
-	data, err := json.MarshalIndent(sess, "", "  ")
-	if err != nil {
-		return
+	msg := "Could not save " + what + ": " + err.Error()
+	slog.Error("not saved", "what", what, "err", err)
+	if s.out != nil {
+		s.out.Error(msg)
 	}
-	sessionFile := filepath.Join(s.state.dataDir, "session.json")
-	tmp := sessionFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err == nil {
-		_ = os.Rename(tmp, sessionFile)
-	}
-}
-
-func loadSession(dataDir string) sessionData {
-	sess := sessionData{Clusters: map[string]sessionEntry{}}
-	data, err := os.ReadFile(filepath.Join(dataDir, "session.json"))
-	if err != nil {
-		return sess
-	}
-	_ = json.Unmarshal(data, &sess)
-	if sess.Clusters == nil {
-		sess.Clusters = map[string]sessionEntry{}
-	}
-	return sess
+	return append(problems, msg)
 }
 
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data) // ignore: the browser has gone away, nobody is left to tell
 }

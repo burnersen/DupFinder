@@ -18,10 +18,12 @@ Nothing that was built elsewhere is signed with this certificate. Every
 signing request is approved by hand, release by release.
 
 FFmpeg is not part of DupFinder and is never signed by this project: on
-first run DupFinder downloads an official build of the
+first run DupFinder downloads one fixed build of the
 [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) project into a
 `bin` folder next to the exe, or uses the `ffmpeg.exe` / `ffprobe.exe` you
-put there.
+put there. Which build, with size and SHA-256, is written in
+[`runtime.json`](runtime.json); DupFinder unpacks nothing that does not
+match.
 
 The file properties of the signed exe name the product `DupFinder` and the
 version of the release; SignPath refuses to sign a file that does not match.
@@ -46,11 +48,14 @@ operating it.
 What DupFinder does on the network, and only for that:
 
 - **FFmpeg download:** only if there is no FFmpeg in the `bin` folder next
-  to the exe, DupFinder asks the GitHub API for the newest release of
-  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) and downloads
-  it from GitHub. Nothing else is sent.
-- **The web interface** is served on `localhost` only: other computers in
-  your network cannot reach it.
+  to the exe, DupFinder downloads the build pinned in
+  [`runtime.json`](runtime.json) from GitHub: from DupFinder's own release
+  `runtime-v1`, or, if that is not reachable, from the
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) release it was
+  copied from. Nothing else is sent.
+- **The web interface** is served on this computer only (`127.0.0.1`) and
+  answers only the browser tab DupFinder opened: other computers in your
+  network and other web pages cannot reach it.
 
 Like any network request, the download reveals your IP address to GitHub.
 Your videos are compared on your own PC and never leave it; the list of
