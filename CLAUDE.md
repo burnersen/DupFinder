@@ -53,7 +53,6 @@ Siehe Kopfkommentar in `main.go`. `os.Exit` steht nur in `main()`, Fehler beim S
 
 - `scan.go` hat über 1000 Zeilen (P3): beim nächsten inhaltlichen Anfassen den Hash- und den Vorschau-Teil in eigene Dateien ziehen (U5).
 - Prüfung der Seite ohne Browser (`web/app_check.js`, T6) fehlt noch.
-- Nach dem Zusammenführen einmal "Mirror FFmpeg" starten, damit der Spiegel `runtime-v1` gefüllt ist.
 
 ## Vor jedem Commit
 
