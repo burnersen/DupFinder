@@ -11,7 +11,7 @@
 -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <parameters>
-    <!-- The version of the release, e.g. 1.1.0 (appVersion in main.go). -->
+    <!-- The version of the release, e.g. 1.1.0 (from the tag; numbers only for a pre-release). -->
     <parameter name="version" required="true" />
   </parameters>
   <zip-file>

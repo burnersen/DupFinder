@@ -7,10 +7,13 @@
 # the release asset.
 #
 # Two ways in:
-#   - push a tag vX.Y.Z (equal to appVersion in main.go), or
-#   - Actions > Release > Run workflow with an existing tag.
-# The release text is .github/release-notes/vX.Y.Z.md if that file exists,
-# otherwise the message of the annotated tag (git tag -a).
+#   - push a tag vX.Y.Z, or
+#   - Actions > Release > Run workflow with a version tag: an existing one is
+#     built as tagged, a new one is built from main and created.
+# The version comes from the tag only and is built into the exe; the code
+# says "dev". The release text is .github/release-notes/X.Y.Z.md (no "v"),
+# written before tagging: without it the release stops. The release carries
+# DupFinder.exe and SHA256SUMS.txt.
 #
 # Dry run: tick "dry run" when starting it by hand. The exe is built and
 # checked and stays on the run page as a workflow artifact; nothing is
@@ -92,44 +95,64 @@ jobs:
           }
           $global:LASTEXITCODE = 0
 
-      # A tag that disagrees with appVersion would publish an exe that names
-      # another version. A pull request has no tag: it builds the version in
-      # main.go.
-      - name: Tag matches appVersion
+      # The version comes from the tag and nowhere else (dev-starterkit
+      # 07-build-und-release.md B1): v1.2.3, or v1.2.3-rc1 for a pre-release.
+      # A pull request has no tag and builds 0.0.0-dryrun.
+      - name: Version from the tag
         env:
           # Passed through the environment, never pasted into the script.
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $match = Select-String -Path main.go -Pattern '^const appVersion = "(.+)"' | Select-Object -First 1
-          if (-not $match) {
-            Write-Host "::error::Could not find appVersion in main.go"
-            exit 1
-          }
-          $inCode = $match.Matches[0].Groups[1].Value
           $tag = $env:RELEASE_TAG
-          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $tag = "v$inCode" }
-          if ("v$inCode" -ne $tag) {
-            Write-Host "::error::Tag $tag does not match appVersion $inCode in main.go"
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $tag = 'v0.0.0-dryrun' }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)(-[0-9A-Za-z.]+)?$') {
+            Write-Host "::error::$tag is not a version tag (expected v1.2.3 or v1.2.3-rc1)"
             exit 1
           }
-          Write-Host "Tag $tag matches appVersion $inCode."
+          $numeric = $Matches[1]
+          $version = $tag.Substring(1)
+          Write-Host "Releasing $version."
           "TAG=$tag" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "VERSION=$inCode" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          # File properties and SignPath take numbers only: 1.3.0 for 1.3.0-rc1.
+          "NUMERIC=$numeric" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Written for users before tagging (dev-starterkit 09-doku.md D7). A
+      # release without it stops here; a dry run uses a placeholder.
+      - name: Release notes
+        run: |
+          $file = ".github/release-notes/$env:VERSION.md"
+          if (Test-Path $file) {
+            Copy-Item $file "$env:RUNNER_TEMP/notes.md"
+          } elseif ($env:DRY_RUN -eq 'true') {
+            Write-Host "Dry run without $file: using a placeholder."
+            "Dry run of $env:VERSION." | Out-File "$env:RUNNER_TEMP/notes.md" -Encoding utf8
+          } else {
+            Write-Host "::error::$file is missing. Write what changed for users, then tag again."
+            exit 1
+          }
 
       - name: go vet
         run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...
 
       # Name and version in the exe's file properties (right-click >
       # Properties > Details). SignPath only signs an exe whose properties
       # name DupFinder and the version of the release.
       - name: File properties
-        run: go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out rsrc --arch amd64 --product-version $env:VERSION --file-version $env:VERSION
+        run: go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json --out rsrc --arch amd64 --product-version $env:NUMERIC --file-version $env:NUMERIC
 
       - name: Build
-        run: go build -trimpath -ldflags="-s -w" -o DupFinder.exe .
+        run: |
+          go build -trimpath -ldflags="-s -w -X main.version=$env:VERSION" -o DupFinder.exe .
+          # The exe must report the version it was given.
+          $said = (./DupFinder.exe -version | Out-String).Trim()
+          if ($said -ne "DupFinder $env:VERSION") { Write-Host "::error::DupFinder.exe -version says '$said'"; exit 1 }
 
       - name: Check the file properties
-        run: ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:VERSION -Path DupFinder.exe
+        run: ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:NUMERIC -Path DupFinder.exe
 
       # --- code signing ------------------------------------------------------
       - name: 'code signing: on or off?'
@@ -181,21 +204,31 @@ jobs:
           wait-for-completion-timeout-in-seconds: 3600
           output-artifact-directory: sign/signed
           parameters: |
-            version: "${{ env.VERSION }}"
+            version: "${{ env.NUMERIC }}"
 
       - name: 'code signing: take over the signed exe'
         if: steps.signing.outputs.enabled == 'true'
         run: |
           Copy-Item sign/signed/DupFinder.exe DupFinder.exe -Force
-          ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:VERSION -Path DupFinder.exe -Signed
+          ./.signpath/check-files.ps1 -ProductName DupFinder -ProductVersion $env:NUMERIC -Path DupFinder.exe -Signed
 
-      - name: 'dry run: keep the exe on the run page'
+      # Checksums of exactly the files that are published, after signing
+      # (dev-starterkit 07-build-und-release.md B4).
+      - name: Checksums
+        run: |
+          $h = (Get-FileHash DupFinder.exe -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", "$h  DupFinder.exe`n", [Text.UTF8Encoding]::new($false))
+          Get-Content SHA256SUMS.txt
+
+      - name: 'dry run: keep the files on the run page'
         if: env.DRY_RUN == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: release-dry-run
-          path: DupFinder.exe
-          retention-days: 7
+          path: |
+            DupFinder.exe
+            SHA256SUMS.txt
+          retention-days: 14
 
       # gh is preinstalled on GitHub runners and signs in with the token this
       # workflow already holds, so no personal access token is involved.
@@ -206,17 +239,8 @@ jobs:
           SIGNED: ${{ steps.signing.outputs.enabled }}
         run: |
           $tag = $env:TAG
-          $title = "DupFinder $tag"
-          $file = ".github/release-notes/$tag.md"
-          if (Test-Path $file) {
-            $notes = [IO.File]::ReadAllText("$PWD/$file")
-          } else {
-            $notes = (git tag -l --format='%(contents)' $tag) -join "`n"
-          }
-          if ([string]::IsNullOrWhiteSpace($notes)) {
-            Write-Host "::error::No release text: add $file or create the tag with 'git tag -a'."
-            exit 1
-          }
+          $title = "DupFinder $env:VERSION"
+          $notes = [IO.File]::ReadAllText("$env:RUNNER_TEMP/notes.md")
           # The release page is the download page, so it links the code
           # signing policy and says whether this exe is signed.
           $policy = "https://github.com/$env:GITHUB_REPOSITORY/blob/main/CODE_SIGNING.md"
@@ -242,7 +266,10 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Release $tag already exists - refreshing its notes and asset."
             gh release edit $tag --title $title --notes-file release-notes.md --draft=false
-            gh release upload $tag DupFinder.exe --clobber
+            gh release upload $tag DupFinder.exe SHA256SUMS.txt --clobber
           } else {
-            gh release create $tag DupFinder.exe --target (git rev-parse HEAD) --title $title --notes-file release-notes.md
+            # 1.3.0-rc1 and the like are pre-releases, never "latest".
+            $extra = @()
+            if ($env:VERSION.Contains('-')) { $extra += '--prerelease' }
+            gh release create $tag DupFinder.exe SHA256SUMS.txt --target (git rev-parse HEAD) --title $title --notes-file release-notes.md @extra
           }
