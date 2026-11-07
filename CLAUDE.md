@@ -4,7 +4,7 @@ Gilt für jede KI, die hier arbeitet (`AGENTS.md` zeigt hierher). Diese Datei is
 
 ## Grundlage
 
-- Dieses Projekt folgt dem **dev-starterkit** (`burnersen/dev-starterkit`, privat). **Kit-Stand: 1.0** (abgeglichen am 07.11.2026 nach `10-bestehendes-projekt.md`, Vorlage `go-cli` mit lokaler Weboberfläche). Vor größerer Arbeit das Kit holen und die passenden Leitlinien lesen (`03` bis `09`). Ist das Kit neuer als der Stand oben, kurz sagen, was sich laut `AENDERUNGEN-*.md` geändert hat.
+- Dieses Projekt folgt dem **dev-starterkit** (`burnersen/dev-starterkit`, privat). **Kit-Stand: 1.1** (abgeglichen am 07.11.2026 nach `10-bestehendes-projekt.md`, Vorlage `go-cli` mit lokaler Weboberfläche). Vor größerer Arbeit das Kit holen und die passenden Leitlinien lesen (`03` bis `09`). Ist das Kit neuer als der Stand oben, kurz sagen, was sich laut `AENDERUNGEN-*.md` geändert hat.
 - Antworte auf Deutsch, locker, ohne Gedankenstriche. Erst sagen, wie du den Auftrag verstanden hast, bei allem Größeren auf Okay warten.
 - Befehle, die der Nutzer selbst ausführt: als ganzer Block zum Kopieren, mit Sicherung vorher und dem Befehl zum Zurückholen (`01-arbeitsweise.md`).
 
