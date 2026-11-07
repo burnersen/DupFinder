@@ -24,15 +24,15 @@ type binaryPaths struct {
 // folder "bin" next to the exe) and nowhere else. If one is missing, the
 // pinned FFmpeg build is downloaded (download.go): it is not shipped with
 // DupFinder. A copy the user put there is used as it is.
-func ensureBinaries(binDir string) (*binaryPaths, error) {
+func ensureBinaries(out *output, binDir string) (*binaryPaths, error) {
 	ffmpegPath := filepath.Join(binDir, "ffmpeg.exe")
 	ffprobePath := filepath.Join(binDir, "ffprobe.exe")
 
 	if fileExists(ffmpegPath) && fileExists(ffprobePath) {
-		fmt.Println("[OK] FFmpeg found.")
+		out.OK("FFmpeg found.")
 	} else {
-		fmt.Println("[...] FFmpeg is missing, downloading it once (about 190 MB)...")
-		if err := downloadFFmpeg(appCtx, binDir); err != nil {
+		out.Step("FFmpeg is missing, downloading it once (about 190 MB)...")
+		if err := downloadFFmpeg(appCtx, out, binDir); err != nil {
 			var ue *UserError
 			if errors.As(err, &ue) {
 				ue.Hint += " Or put ffmpeg.exe and ffprobe.exe (Windows build from https://github.com/BtbN/FFmpeg-Builds) into " + binDir

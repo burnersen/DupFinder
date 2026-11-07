@@ -59,9 +59,12 @@ func parsePGM(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, _ := strconv.Atoi(wTok)
-	h, _ := strconv.Atoi(hTok)
-	maxv, _ := strconv.Atoi(mTok)
+	w, errW := strconv.Atoi(wTok)
+	h, errH := strconv.Atoi(hTok)
+	maxv, errM := strconv.Atoi(mTok)
+	if errW != nil || errH != nil || errM != nil || w <= 0 || h <= 0 || maxv <= 0 {
+		return nil, fmt.Errorf("bad PGM header %q %q %q", wTok, hTok, mTok)
+	}
 
 	if idx >= len(data) {
 		return nil, fmt.Errorf("kein body")

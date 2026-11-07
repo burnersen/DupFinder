@@ -62,7 +62,7 @@ var (
 	procShowWindow               = user32.NewProc("ShowWindow")
 	procIsIconic                 = user32.NewProc("IsIconic")
 
-	kernel32               = syscall.NewLazyDLL("kernel32.dll")
+	// kernel32 is declared in console_windows.go.
 	procGetCurrentThreadID = kernel32.NewProc("GetCurrentThreadId")
 )
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,16 +166,16 @@ func TestExactDupeReps(t *testing.T) {
 func TestCacheRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cache.json")
 	mtime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	c := loadCache(path) // missing file: empty cache
+	c := mustCache(t, path) // missing file: empty cache
 	c.set(videoInfo{Path: "x.mkv", Size: 42, ModTime: mtime, Duration: time.Minute, Hashes: hashes(1)})
 	if err := c.save(path); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := loadCache(path).get("x.mkv", 42, mtime)
+	got, ok := mustCache(t, path).get("x.mkv", 42, mtime)
 	if !ok || got.Duration != time.Minute || len(got.Hashes) != sampleCount {
 		t.Fatalf("got %+v, %v", got, ok)
 	}
-	if _, ok := loadCache(path).get("x.mkv", 43, mtime); ok {
+	if _, ok := mustCache(t, path).get("x.mkv", 43, mtime); ok {
 		t.Fatal("a changed size must miss the cache")
 	}
 }
@@ -199,13 +200,13 @@ func TestCachePruneOnlyUnderScannedRoots(t *testing.T) {
 
 func TestIgnoreListRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ignored.json")
-	il := loadIgnoreList(path)
+	il := mustIgnoreList(t, path)
 	il.add(`D:\b.mkv`)
 	il.add(`D:\a.mkv`)
 	if err := il.save(path); err != nil {
 		t.Fatal(err)
 	}
-	got := loadIgnoreList(path)
+	got := mustIgnoreList(t, path)
 	if got.size() != 2 || !got.has(`D:\a.mkv`) {
 		t.Fatalf("got %v", got.paths)
 	}
@@ -221,5 +222,62 @@ func TestSplitSeek(t *testing.T) {
 	}
 	if pre, post := splitSeek(3); pre != 0 || post != 3 {
 		t.Fatalf("3 s: %v %v", pre, post)
+	}
+}
+
+func mustCache(t *testing.T, path string) *cache {
+	t.Helper()
+	c, warning, err := loadCache(path)
+	if err != nil || warning != "" {
+		t.Fatalf("loadCache: %v %q", err, warning)
+	}
+	return c
+}
+
+func mustIgnoreList(t *testing.T, path string) *ignoreList {
+	t.Helper()
+	il, warning, err := loadIgnoreList(path)
+	if err != nil || warning != "" {
+		t.Fatalf("loadIgnoreList: %v %q", err, warning)
+	}
+	return il
+}
+
+// Bug found 07.11.2026: a broken ignored.json was read as empty and
+// overwritten with the next decision, so every earlier "ignore" was lost.
+func TestBrokenIgnoreListIsKeptAside(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ignored.json")
+	writeFile(t, path, []byte(`["D:\\a.mkv", "D:\\b.mk`)) // cut off, like after a power failure
+	il, warning, err := loadIgnoreList(path)
+	if err != nil || il.size() != 0 || !strings.Contains(warning, "ignored.json") {
+		t.Fatalf("got %v, %d entries, warning %q", err, il.size(), warning)
+	}
+	matches, _ := filepath.Glob(path + ".broken-*")
+	if len(matches) != 1 {
+		t.Fatalf("broken file not kept aside: %v", matches)
+	}
+	if b, _ := os.ReadFile(matches[0]); !strings.Contains(string(b), "a.mkv") {
+		t.Fatalf("kept file lost its content: %q", b)
+	}
+	il.add("new.mkv")
+	if err := il.save(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(matches[0]); !strings.Contains(string(b), "a.mkv") {
+		t.Fatal("saving overwrote the kept file")
+	}
+}
+
+func TestStateFilesAreWrittenAtomically(t *testing.T) {
+	dir := t.TempDir()
+	il, _, _ := loadIgnoreList(filepath.Join(dir, "ignored.json"))
+	il.add("x.mkv")
+	if err := il.save(filepath.Join(dir, "ignored.json")); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("left behind: %v", entries)
 	}
 }

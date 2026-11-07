@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -169,7 +170,10 @@ func runHiddenCmd(path string, timeout time.Duration, args ...string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	hideWindow(cmd)
-	return cmd.Run()
+	if err := startTracked(cmd); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
 
 var samplePositions = []float64{0.10, 0.25, 0.40, 0.55, 0.70, 0.85}
@@ -353,7 +357,13 @@ func probeVideo(ctx context.Context, ffprobePath, videoPath string) (videoInfo, 
 		"-v", "error", "-print_format", "json",
 		"-show_format", "-show_streams", videoPath)
 	hideWindow(cmd)
-	out, err := cmd.Output()
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err = startTracked(cmd)
+	if err == nil {
+		err = cmd.Wait()
+	}
+	out := stdout.Bytes()
 	if err != nil {
 		info.HasError = true
 		info.ErrorMessage = fmt.Sprintf("ffprobe: %v", err)
@@ -514,7 +524,7 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 
 	type ab struct{ a, b int }
 	shared := map[ab]int{}
-	for t, idxs := range tokenIndex {
+	for _, idxs := range tokenIndex {
 		if len(idxs) < 2 || len(idxs) > maxTokenSpread {
 			continue
 		}
@@ -527,7 +537,6 @@ func computeFilenameBridges(infos []videoInfo) [][2]*videoInfo {
 				shared[ab{a, b}]++
 			}
 		}
-		_ = t
 	}
 
 	var pairs [][2]*videoInfo
@@ -568,181 +577,12 @@ func verifyClusterMatches(cl cluster) [][2]int {
 	return pairs
 }
 
-// ============================================================================
-// Cache
-// ============================================================================
-
-type cacheEntry struct {
-	Key  string    `json:"key"`
-	Info videoInfo `json:"info"`
-}
-
-type cache struct {
-	mu      sync.Mutex
-	entries map[string]videoInfo
-	dirty   bool
-}
-
-func loadCache(path string) *cache {
-	c := &cache{entries: map[string]videoInfo{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return c
+// saveCache stores the cache. A cache that cannot be saved costs only time on
+// the next scan, so this goes to the log and not to the screen.
+func saveCache(state *appState, path string) {
+	if err := state.cache.save(path); err != nil {
+		slog.Warn("cache not saved", "err", err)
 	}
-	var entries []cacheEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return c
-	}
-	for _, e := range entries {
-		c.entries[e.Key] = e.Info
-	}
-	return c
-}
-
-func (c *cache) get(path string, size int64, mtime time.Time) (videoInfo, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	info, ok := c.entries[makeCacheKey(path, size, mtime)]
-	return info, ok
-}
-
-func (c *cache) set(info videoInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[makeCacheKey(info.Path, info.Size, info.ModTime)] = info
-	c.dirty = true
-}
-
-func (c *cache) save(path string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.dirty {
-		return nil
-	}
-	entries := make([]cacheEntry, 0, len(c.entries))
-	for k, v := range c.entries {
-		entries = append(entries, cacheEntry{Key: k, Info: v})
-	}
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	c.dirty = false
-	return nil
-}
-
-// pruneMissing entfernt verwaiste Cache-Einträge (Variante A): nur solche, deren
-// Datei NACHWEISLICH nicht mehr existiert (os.Stat → IsNotExist) UND deren Pfad
-// unter einer der aktuell gescannten Wurzeln liegt. So werden verschobene/
-// gelöschte/umbenannte Dateien aufgeräumt, ABER Einträge von gerade nicht
-// gescannten oder offline Platten bleiben unangetastet (kein Datenverlust an
-// gültigen Hashes). Rückgabe: Anzahl entfernter Einträge.
-func (c *cache) pruneMissing(roots []string) int {
-	// Wurzeln normalisieren (kleingeschrieben, sauber) für den Präfix-Vergleich.
-	norm := make([]string, 0, len(roots))
-	for _, r := range roots {
-		norm = append(norm, strings.ToLower(filepath.Clean(r)))
-	}
-	underRoot := func(p string) bool {
-		lp := strings.ToLower(filepath.Clean(p))
-		for _, r := range norm {
-			if lp == r || strings.HasPrefix(lp, r+string(filepath.Separator)) {
-				return true
-			}
-		}
-		return false
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	removed := 0
-	for k, v := range c.entries {
-		if v.Path == "" || !underRoot(v.Path) {
-			continue // außerhalb der gescannten Wurzeln → nicht anfassen
-		}
-		if _, err := os.Stat(v.Path); err != nil && os.IsNotExist(err) {
-			delete(c.entries, k)
-			removed++
-		}
-	}
-	if removed > 0 {
-		c.dirty = true
-	}
-	return removed
-}
-
-// ============================================================================
-// Ignore-Liste
-// ============================================================================
-
-type ignoreList struct {
-	mu    sync.Mutex
-	paths map[string]bool
-}
-
-func loadIgnoreList(path string) *ignoreList {
-	il := &ignoreList{paths: map[string]bool{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return il
-	}
-	var paths []string
-	if err := json.Unmarshal(data, &paths); err == nil {
-		for _, p := range paths {
-			il.paths[p] = true
-		}
-	}
-	return il
-}
-
-func (il *ignoreList) has(p string) bool {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	return il.paths[p]
-}
-
-func (il *ignoreList) add(p string) {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	il.paths[p] = true
-}
-
-func (il *ignoreList) remove(p string) {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	delete(il.paths, p)
-}
-
-func (il *ignoreList) size() int {
-	il.mu.Lock()
-	defer il.mu.Unlock()
-	return len(il.paths)
-}
-
-func (il *ignoreList) save(path string) error {
-	il.mu.Lock()
-	paths := make([]string, 0, len(il.paths))
-	for p := range il.paths {
-		paths = append(paths, p)
-	}
-	il.mu.Unlock()
-	sort.Strings(paths)
-	data, err := json.MarshalIndent(paths, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // ============================================================================
@@ -785,7 +625,7 @@ func runFullScan(state *appState, cacheFile string) error {
 	}
 
 	infos := indexFiles(state, files)
-	_ = state.cache.save(cacheFile)
+	saveCache(state, cacheFile)
 
 	var rerr int64
 	for i := range infos {
@@ -838,11 +678,11 @@ func runFullScan(state *appState, cacheFile string) error {
 		// Zeitlich gedrosselt zwischenspeichern statt nach festen Cluster-Schritten:
 		// vermeidet die wiederholte Vollschreibung der cache.json bei großen Läufen.
 		if time.Since(lastCacheSave) >= cacheSaveInterval {
-			_ = state.cache.save(cacheFile)
+			saveCache(state, cacheFile)
 			lastCacheSave = time.Now()
 		}
 	}
-	_ = state.cache.save(cacheFile)
+	saveCache(state, cacheFile)
 
 	// Bridge-Kandidaten per pHash bestätigen (gleiche Schwelle wie im Cluster).
 	var bridgePairs [][2]*videoInfo
@@ -1674,18 +1514,21 @@ func extractSingleThumbFrame(ffmpegPath, videoPath string, ts float64, idx int,
 
 	err := runOnce(useHwAccel)
 	if err != nil && useHwAccel {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		err = runOnce(false)
 	}
 	if err != nil {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		return
 	}
 	if st, err := os.Stat(tmpThumb); err != nil || st.Size() == 0 {
-		_ = os.Remove(tmpThumb)
+		_ = os.Remove(tmpThumb) // ignore: cleanup after a failed thumbnail
 		return
 	}
-	_ = os.Rename(tmpThumb, finalThumb)
+	if err := os.Rename(tmpThumb, finalThumb); err != nil {
+		// The page shows an empty frame for it; the next scan tries again.
+		slog.Warn("thumbnail not saved", "file", finalThumb, "err", err)
+	}
 }
 
 // ============================================================================

@@ -91,7 +91,7 @@ type pinnedFile struct {
 
 // downloadFFmpeg fetches the pinned build into targetDir and unpacks
 // ffmpeg.exe and ffprobe.exe from it. The ZIP itself is removed afterwards.
-func downloadFFmpeg(ctx context.Context, targetDir string) error {
+func downloadFFmpeg(ctx context.Context, out *output, targetDir string) error {
 	rt, err := loadRuntime()
 	if err != nil {
 		return err
@@ -105,8 +105,12 @@ func downloadFFmpeg(ctx context.Context, targetDir string) error {
 	if err := fetchPinned(ctx, newHTTPClient(), rt.FFmpeg, zipPath, show); err != nil {
 		return err
 	}
-	fmt.Printf("Download complete (%.1f MB). Unpacking ffmpeg.exe and ffprobe.exe...\n", float64(rt.FFmpeg.Size)/bytesPerMiB)
-	return extractFFmpegBinaries(zipPath, targetDir)
+	out.OK(fmt.Sprintf("Downloaded %s (%.1f MB), size and SHA-256 match.", rt.FFmpeg.Name, float64(rt.FFmpeg.Size)/bytesPerMiB))
+	if err := extractFFmpegBinaries(zipPath, targetDir); err != nil {
+		return err
+	}
+	out.OK("ffmpeg.exe and ffprobe.exe are in " + targetDir)
+	return nil
 }
 
 // fetchPinned tries the sources of e in order until one delivers the pinned

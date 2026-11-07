@@ -97,10 +97,10 @@ func TestIgnoreDecisionIsStoredAndUndone(t *testing.T) {
 	if rec := do(t, s, http.MethodPost, "/api/decide", "application/json", string(body)); rec.Code != http.StatusOK {
 		t.Fatalf("decide: %d %s", rec.Code, rec.Body)
 	}
-	if !loadIgnoreList(s.ignoreFile).has(paths[1]) {
+	if !mustIgnoreList(t, s.ignoreFile).has(paths[1]) {
 		t.Fatal("ignored file is not in ignored.json")
 	}
-	if sess := loadSession(s.state.dataDir); !sess.Clusters["c1"].Decided {
+	if sess, _, _ := loadSession(s.state.dataDir); !sess.Clusters["c1"].Decided {
 		t.Fatal("decision is not in session.json")
 	}
 	if rec := do(t, s, http.MethodPost, "/api/decide", "application/json", string(body)); rec.Code != http.StatusConflict {
@@ -110,7 +110,7 @@ func TestIgnoreDecisionIsStoredAndUndone(t *testing.T) {
 	if rec := do(t, s, http.MethodPost, "/api/undo", "application/json", `{"clusterId":"c1"}`); rec.Code != http.StatusOK {
 		t.Fatalf("undo: %d", rec.Code)
 	}
-	if loadIgnoreList(s.ignoreFile).has(paths[1]) {
+	if mustIgnoreList(t, s.ignoreFile).has(paths[1]) {
 		t.Fatal("undo left the file in ignored.json")
 	}
 }

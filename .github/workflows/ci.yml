@@ -68,10 +68,12 @@ jobs:
         run: go test -count=1 ./...
       - name: build
         run: go build -trimpath -o DupFinder.exe .
-      # The exe must start, answer and end with the documented exit code.
+      # The exe must start, answer and end with the documented exit codes.
       - name: smoke test
         shell: pwsh
         run: |
+          ./DupFinder.exe -version
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::-version must end with exit code 0"; exit 1 }
           ./DupFinder.exe
           if ($LASTEXITCODE -ne 1) { Write-Host "::error::no folder given must end with exit code 1"; exit 1 }
           exit 0

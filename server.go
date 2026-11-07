@@ -5,10 +5,10 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,6 +27,7 @@ type server struct {
 	ignoreFile string
 	guard      *webGuard
 	httpSrv    *http.Server
+	out        *output // console; nil in tests
 }
 
 func newServer(state *appState, cacheFile, ignoreFile string, guard *webGuard) *server {
@@ -50,7 +51,7 @@ func (s *server) handler() http.Handler { return s.guard.wrap(s.routes()) }
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	webFS, _ := fs.Sub(webAssets, "web")
+	webFS, _ := fs.Sub(webAssets, "web") // ignore: "web" is embedded at build time, Sub cannot fail
 	mux.Handle("/", http.FileServer(http.FS(webFS)))
 
 	mux.HandleFunc("/api/state", s.handleState)
@@ -179,10 +180,10 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	// WriteTimeout des Servers (60s) für DIESE Langläufer-Verbindung aufheben,
 	// sonst würde der Stream nach 60s abreißen.
-	_ = rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{}) // ignore: not every writer supports it; the stream works without
 
 	write := func(event, data string) bool {
-		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second)) // ignore: as above
 		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 			return false
 		}
@@ -198,7 +199,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		s.state.progress.mu.Lock()
-		pb, _ := json.Marshal(map[string]any{
+		pb, _ := json.Marshal(map[string]any{ // ignore: strings and numbers always encode
 			"phase":    s.state.progress.Phase,
 			"current":  s.state.progress.Current,
 			"total":    s.state.progress.Total,
@@ -300,15 +301,17 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 	s.state.mu.Lock()
 	cl.Decided = true
 	cl.Decisions = req.Decisions
+	sessErr := saveSessionLocked(s.state)
 	s.state.mu.Unlock()
 	s.state.bumpVersion()
 
-	_ = s.state.ignored.save(s.ignoreFile)
-	s.saveSession()
+	problems := deleteErrors
+	problems = s.notSaved(problems, "the decision", sessErr)
+	problems = s.notSaved(problems, "the ignore list", s.state.ignored.save(s.ignoreFile))
 
 	resp := map[string]any{"ok": true}
-	if len(deleteErrors) > 0 {
-		resp["errors"] = deleteErrors
+	if len(problems) > 0 {
+		resp["errors"] = problems
 	}
 	writeJSON(w, resp)
 }
@@ -368,13 +371,17 @@ func (s *server) handleUndo(w http.ResponseWriter, r *http.Request) {
 			}
 			cl.Decided = false
 			cl.Decisions = nil
-			s.saveSessionLocked()
-			_ = s.state.ignored.save(s.ignoreFile)
+			problems := s.notSaved(nil, "the decision", saveSessionLocked(s.state))
+			problems = s.notSaved(problems, "the ignore list", s.state.ignored.save(s.ignoreFile))
 			s.state.bumpVersion()
-			writeJSON(w, map[string]any{
+			resp := map[string]any{
 				"ok":   true,
 				"note": "Bereits gelöschte Dateien liegen im Windows-Papierkorb.",
-			})
+			}
+			if len(problems) > 0 {
+				resp["errors"] = problems
+			}
+			writeJSON(w, resp)
 			return
 		}
 	}
@@ -438,7 +445,9 @@ func (s *server) handleRescan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		_ = runFullScan(s.state, s.cacheFile)
+		if err := runFullScan(s.state, s.cacheFile); err != nil {
+			s.scanFailed(err)
+		}
 	}()
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -484,20 +493,21 @@ func (s *server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"ok": true})
 	go func() {
-		time.Sleep(200 * time.Millisecond)
-		fmt.Println("\nShutdown via Browser.")
-		shutdownRequested.Store(true)
-		appCancel() // laufende ffmpeg/ffprobe-Kindprozesse sofort abbrechen
-		// Harte Reißleine analog zum Signal-Handler, falls Shutdown/Cleanup hängt.
-		time.AfterFunc(4*time.Second, func() { os.Exit(0) })
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		// KEIN os.Exit(0): ListenAndServe kehrt mit ErrServerClosed zurück →
-		// main() läuft sauber zu Ende und die defers (u.a. bp.cleanup) löschen
-		// das Temp-Verzeichnis. Sonst bliebe pro UI-Beenden ein ffmpeg/ffprobe-
-		// Tempordner (~100-150 MB) liegen.
-		_ = s.httpSrv.Shutdown(ctx)
+		time.Sleep(200 * time.Millisecond) // the answer reaches the page first
+		if s.out != nil {
+			s.out.Info("Quit in the browser.")
+		}
+		stopApp("browser")
 	}()
+}
+
+// scanFailed reports a scan that stopped with an error. The page shows the
+// last progress message; the console and the log say why.
+func (s *server) scanFailed(err error) {
+	slog.Error("scan failed", "err", err)
+	if s.out != nil {
+		s.out.Error("The scan stopped: " + err.Error())
+	}
 }
 
 // ============================================================================
@@ -577,7 +587,7 @@ func (s *server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Reaper-Goroutine: vermeidet Zombie-Prozesse und gibt Handles frei.
-	go func() { _ = cmd.Wait() }()
+	go func() { _ = cmd.Wait() }() // ignore: only reaps the process; the player's exit code means nothing here
 
 	writeJSON(w, map[string]any{"ok": true})
 }
@@ -622,57 +632,21 @@ func (s *server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// ============================================================================
-// Session
-// ============================================================================
-
-type sessionEntry struct {
-	Decided   bool       `json:"decided"`
-	Decisions []decision `json:"decisions"`
-}
-
-type sessionData struct {
-	Clusters map[string]sessionEntry `json:"clusters"`
-}
-
-func (s *server) saveSession() {
-	s.state.mu.RLock()
-	defer s.state.mu.RUnlock()
-	s.saveSessionLocked()
-}
-
-func (s *server) saveSessionLocked() {
-	sess := sessionData{Clusters: map[string]sessionEntry{}}
-	for _, cl := range s.state.clusters {
-		if cl.Decided {
-			sess.Clusters[cl.ID] = sessionEntry{Decided: cl.Decided, Decisions: cl.Decisions}
-		}
+// notSaved reports a file that could not be written: in the answer to the
+// page (which shows it), in the console and in the log.
+func (s *server) notSaved(problems []string, what string, err error) []string {
+	if err == nil {
+		return problems
 	}
-	data, err := json.MarshalIndent(sess, "", "  ")
-	if err != nil {
-		return
+	msg := "Could not save " + what + ": " + err.Error()
+	slog.Error("not saved", "what", what, "err", err)
+	if s.out != nil {
+		s.out.Error(msg)
 	}
-	sessionFile := filepath.Join(s.state.dataDir, "session.json")
-	tmp := sessionFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err == nil {
-		_ = os.Rename(tmp, sessionFile)
-	}
-}
-
-func loadSession(dataDir string) sessionData {
-	sess := sessionData{Clusters: map[string]sessionEntry{}}
-	data, err := os.ReadFile(filepath.Join(dataDir, "session.json"))
-	if err != nil {
-		return sess
-	}
-	_ = json.Unmarshal(data, &sess)
-	if sess.Clusters == nil {
-		sess.Clusters = map[string]sessionEntry{}
-	}
-	return sess
+	return append(problems, msg)
 }
 
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data) // ignore: the browser has gone away, nobody is left to tell
 }
