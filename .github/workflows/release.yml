@@ -97,6 +97,9 @@ jobs:
       # another version. A pull request has no tag: it builds the version in
       # main.go.
       - name: Tag matches appVersion
+        env:
+          # Passed through the environment, never pasted into the script.
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           $match = Select-String -Path main.go -Pattern '^const appVersion = "(.+)"' | Select-Object -First 1
           if (-not $match) {
@@ -104,7 +107,7 @@ jobs:
             exit 1
           }
           $inCode = $match.Matches[0].Groups[1].Value
-          $tag = "${{ inputs.tag || github.ref_name }}"
+          $tag = $env:RELEASE_TAG
           if ($env:GITHUB_EVENT_NAME -eq 'pull_request') { $tag = "v$inCode" }
           if ("v$inCode" -ne $tag) {
             Write-Host "::error::Tag $tag does not match appVersion $inCode in main.go"
