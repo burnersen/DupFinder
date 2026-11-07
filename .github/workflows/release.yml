@@ -125,7 +125,7 @@ jobs:
           if (Test-Path $file) {
             Copy-Item $file "$env:RUNNER_TEMP/notes.md"
           } elseif ($env:DRY_RUN -eq 'true') {
-            Write-Host "Dry run without $file: using a placeholder."
+            Write-Host "Dry run without ${file}: using a placeholder."
             "Dry run of $env:VERSION." | Out-File "$env:RUNNER_TEMP/notes.md" -Encoding utf8
           } else {
             Write-Host "::error::$file is missing. Write what changed for users, then tag again."
