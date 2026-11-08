@@ -7,7 +7,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,37 +17,49 @@ import (
 	"unsafe"
 )
 
-// ============================================================================
-// Moving to the recycle bin
-//
-// Main way: IFileOperation (COM, since Windows Vista). Microsoft's recommended
-// replacement for SHFileOperation; handles paths far beyond MAX_PATH (260
-// characters), which matters for deeply nested video folders.
-//
-// Fallback: the proven SHFileOperation, used if COM is not available or
-// IFileOperation fails. Fully working for normal (short) paths, so no
-// function is ever lost.
-// ============================================================================
+var (
+	rbKernel32                   = syscall.NewLazyDLL("kernel32.dll")
+	rbGetVolumePathName          = rbKernel32.NewProc("GetVolumePathNameW")
+	rbGetVolumeNameForMountPoint = rbKernel32.NewProc("GetVolumeNameForVolumeMountPointW")
+	rbGetDriveType               = rbKernel32.NewProc("GetDriveTypeW")
 
-const (
-	FO_DELETE          = 0x0003
-	FOF_SILENT         = 0x0004
-	FOF_NOCONFIRMATION = 0x0010
-	FOF_ALLOWUNDO      = 0x0040
-	FOF_NOCONFIRMMKDIR = 0x0200
-	FOF_NOERRORUI      = 0x0400
+	rbShell32         = syscall.NewLazyDLL("shell32.dll")
+	rbSHFileOperation = rbShell32.NewProc("SHFileOperationW")
+	rbSHQueryBin      = rbShell32.NewProc("SHQueryRecycleBinW")
+	rbSHCreateItem    = rbShell32.NewProc("SHCreateItemFromParsingName")
 
-	// Flags of IFileOperation
-	FOF_NO_UI            = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_NOCONFIRMMKDIR
-	FOFX_RECYCLEONDELETE = 0x00080000 // DeleteItem goes to the recycle bin, not permanent (Win8+)
-	FOFX_EARLYFAILURE    = 0x00100000
-
-	// CoInitializeEx / CoCreateInstance
-	COINIT_APARTMENTTHREADED = 0x2
-	CLSCTX_INPROC_SERVER     = 0x1
+	rbOle32          = syscall.NewLazyDLL("ole32.dll")
+	rbCoInitializeEx = rbOle32.NewProc("CoInitializeEx")
+	rbCoUninitialize = rbOle32.NewProc("CoUninitialize")
+	rbCoCreate       = rbOle32.NewProc("CoCreateInstance")
 )
 
-type shFileOpStruct struct {
+const (
+	rbDriveRemovable = 2
+	rbDriveRemote    = 4
+	rbDriveCDROM     = 5
+
+	// The settings of the bin are per drive under HKEY_CURRENT_USER. Without
+	// an entry Windows uses its default, and nothing is judged.
+	rbVolumeKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume\`
+
+	rbFODelete          = 0x0003
+	rbFOFSilent         = 0x0004
+	rbFOFNoConfirmation = 0x0010
+	rbFOFAllowUndo      = 0x0040
+	rbFOFNoConfirmMkdir = 0x0200
+	rbFOFNoErrorUI      = 0x0400
+	rbFOFXRecycle       = 0x00080000 // IFileOperation: to the bin, not for good (Windows 8 and newer)
+	rbFOFXEarlyFailure  = 0x00100000
+
+	rbCoinitApartment = 0x2
+	rbClsctxInproc    = 0x1
+	rbRPCChangedMode  = 0x80010106
+)
+
+// rbFileOp is SHFILEOPSTRUCTW of 64 bit Windows (8 byte alignment, 56
+// bytes; TestRecycleStructSizes).
+type rbFileOp struct {
 	hwnd                  uintptr
 	wFunc                 uint32
 	pFrom                 *uint16
@@ -56,185 +70,245 @@ type shFileOpStruct struct {
 	lpszProgressTitle     *uint16
 }
 
-type guid struct {
+// rbQueryInfo is SHQUERYRBINFO (24 bytes): how much is in the bin.
+type rbQueryInfo struct {
+	cbSize   uint32
+	bytes    int64
+	numItems int64
+}
+
+type rbGUID struct {
 	Data1 uint32
 	Data2 uint16
 	Data3 uint16
 	Data4 [8]byte
 }
 
-// CLSID_FileOperation  {3ad05575-8857-4850-9277-11b85bdb8e09}
-var clsidFileOperation = guid{0x3ad05575, 0x8857, 0x4850, [8]byte{0x92, 0x77, 0x11, 0xb8, 0x5b, 0xdb, 0x8e, 0x09}}
-
-// IID_IFileOperation   {947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8}
-var iidFileOperation = guid{0x947aab5f, 0x0a5c, 0x4c13, [8]byte{0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9, 0xf8}}
-
-// IID_IShellItem       {43826d1e-e718-42ee-bc55-a1e261c37bfe}
-var iidShellItem = guid{0x43826d1e, 0xe718, 0x42ee, [8]byte{0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe}}
-
 var (
-	shell32             = syscall.NewLazyDLL("shell32.dll")
-	procSHFileOperation = shell32.NewProc("SHFileOperationW")
-	procSHCreateItem    = shell32.NewProc("SHCreateItemFromParsingName")
-
-	ole32              = syscall.NewLazyDLL("ole32.dll")
-	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
-	procCoUninit       = ole32.NewProc("CoUninitialize")
-	procCoCreate       = ole32.NewProc("CoCreateInstance")
+	rbCLSIDFileOperation = rbGUID{0x3ad05575, 0x8857, 0x4850, [8]byte{0x92, 0x77, 0x11, 0xb8, 0x5b, 0xdb, 0x8e, 0x09}}
+	rbIIDFileOperation   = rbGUID{0x947aab5f, 0x0a5c, 0x4c13, [8]byte{0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9, 0xf8}}
+	rbIIDShellItem       = rbGUID{0x43826d1e, 0xe718, 0x42ee, [8]byte{0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe}}
 )
 
-// moveToRecycleBin moves path to the recycle bin: the modern way that handles
-// long paths first, and on any error the SHFileOperation fallback.
-func moveToRecycleBin(path string) error {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		absPath = path
-	}
-
-	if err := recycleViaIFileOperation(absPath); err == nil {
-		return nil
-	}
-	// Fallback: the proven legacy way (limited to MAX_PATH, but stable).
-	return recycleViaSHFileOperation(absPath)
-}
-
-// ----------------------------------------------------------------------------
-// Main way: IFileOperation (COM)
-// ----------------------------------------------------------------------------
-
-// vtable indices of IFileOperation (inherits IUnknown: QI=0, AddRef=1, Release=2).
+// Places in the vtable of IFileOperation (after IUnknown: 0 to 2).
 const (
-	idxRelease           = 2  // IUnknown::Release
-	idxSetOperationFlags = 5  // IFileOperation::SetOperationFlags
-	idxDeleteItem        = 18 // IFileOperation::DeleteItem
-	idxPerformOps        = 21 // IFileOperation::PerformOperations
+	rbIdxRelease           = 2
+	rbIdxSetOperationFlags = 5
+	rbIdxDeleteItem        = 18
+	rbIdxPerformOperations = 21
 )
 
-func recycleViaIFileOperation(absPath string) error {
-	// COM needs a fixed OS thread (apartment model).
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	hr, _, _ := procCoInitializeEx.Call(0, COINIT_APARTMENTTHREADED)
-	// S_OK (0) and S_FALSE (1) are fine (S_FALSE: initialised already).
-	// RPC_E_CHANGED_MODE (0x80010106): another mode is active, then do NOT uninitialise.
-	const rpcChangedMode = 0x80010106
-	if uint32(hr) != rpcChangedMode {
-		defer procCoUninit.Call()
+// moveToRecycleBin moves a file or folder to the recycle bin, but only when
+// the bin can take it. Otherwise it stays, and the error (errBinRefused)
+// says why. After the move it checks that the bin grew; if not, the error
+// is errRecycleNotVerified: the file is gone and not in the bin.
+func moveToRecycleBin(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
 	}
-
-	// Create the IFileOperation instance.
-	var pfo unsafe.Pointer
-	hr, _, _ = procCoCreate.Call(
-		uintptr(unsafe.Pointer(&clsidFileOperation)),
-		0,
-		CLSCTX_INPROC_SERVER,
-		uintptr(unsafe.Pointer(&iidFileOperation)),
-		uintptr(unsafe.Pointer(&pfo)),
-	)
-	if int32(hr) < 0 || pfo == nil {
-		return fmt.Errorf("CoCreateInstance(IFileOperation) hr=0x%x", uint32(hr))
+	if isUNC(abs) {
+		return fmt.Errorf("%s: a network drive has no recycle bin: %w", abs, errBinRefused)
 	}
-	defer release(pfo)
-
-	// To the recycle bin instead of deleting for good, without UI or questions.
-	if hr := callMethod(pfo, idxSetOperationFlags,
-		uintptr(FOF_NO_UI|FOF_ALLOWUNDO|FOFX_RECYCLEONDELETE|FOFX_EARLYFAILURE)); int32(hr) < 0 {
-		return fmt.Errorf("SetOperationFlags hr=0x%x", uint32(hr))
-	}
-
-	// Build the IShellItem from the path (handles long paths).
-	psi, err := shellItemFromPath(absPath)
+	info, err := os.Lstat(abs)
 	if err != nil {
 		return err
 	}
-	defer release(psi)
-
-	// DeleteItem(psi, NULL): psi is passed as a plain argument.
-	if hr := callMethod(pfo, idxDeleteItem, uintptr(psi), 0); int32(hr) < 0 {
-		return fmt.Errorf("DeleteItem hr=0x%x", uint32(hr))
+	size := info.Size()
+	if info.IsDir() {
+		size = -1 // the size of a folder is not judged; the check afterwards still is
 	}
-	// PerformOperations()
-	if hr := callMethod(pfo, idxPerformOps); int32(hr) < 0 {
-		return fmt.Errorf("PerformOperations hr=0x%x", uint32(hr))
+	facts := binFactsOf(abs)
+	if reason := binRefuses(facts, size); reason != "" {
+		return fmt.Errorf("%s: %s: %w", abs, reason, errBinRefused)
+	}
+	beforeItems, beforeBytes, haveBefore := binContents(facts.root)
+
+	if err := recycleViaIFileOperation(abs); err != nil {
+		// The old way, for systems without the COM interface. It knows
+		// paths up to 260 characters only.
+		if err2 := recycleViaSHFileOperation(abs); err2 != nil {
+			return fmt.Errorf("move %s to the recycle bin: %w", abs, errors.Join(err, err2))
+		}
+	}
+	if _, err := os.Lstat(abs); err == nil {
+		return fmt.Errorf("move %s to the recycle bin: Windows left it where it is", abs)
+	}
+	if haveBefore {
+		if afterItems, afterBytes, ok := binContents(facts.root); ok && !binGrew(beforeItems, beforeBytes, afterItems, afterBytes) {
+			return fmt.Errorf("%s: %w", abs, errRecycleNotVerified)
+		}
 	}
 	return nil
 }
 
-// shellItemFromPath creates an IShellItem. Very long paths get the \\?\
-// prefix, which gets around the MAX_PATH limit of the parser.
-func shellItemFromPath(absPath string) (unsafe.Pointer, error) {
-	parse := absPath
-	if len(absPath) >= 240 && !strings.HasPrefix(absPath, `\\?\`) {
-		if strings.HasPrefix(absPath, `\\`) {
-			parse = `\\?\UNC\` + absPath[2:] // UNC network path
-		} else {
-			parse = `\\?\` + absPath
-		}
+// binFactsOf asks Windows about the bin of the drive that holds path. What
+// Windows does not answer stays unknown and is not judged.
+func binFactsOf(path string) binFacts {
+	var f binFacts
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return f
+	}
+	buf := make([]uint16, 1024)
+	if r, _, _ := rbGetVolumePathName.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))); r == 0 {
+		return f
+	}
+	f.root = syscall.UTF16ToString(buf)
+	root, err := syscall.UTF16PtrFromString(f.root)
+	if err != nil {
+		return f
+	}
+	switch r, _, _ := rbGetDriveType.Call(uintptr(unsafe.Pointer(root))); r {
+	case rbDriveRemote:
+		f.network = true
+	case rbDriveRemovable:
+		f.removable = true
+	case rbDriveCDROM:
+		f.cdrom = true
+	}
+	name := make([]uint16, 64) // \\?\Volume{GUID}\ has 49 characters
+	if r, _, _ := rbGetVolumeNameForMountPoint.Call(uintptr(unsafe.Pointer(root)), uintptr(unsafe.Pointer(&name[0])), uintptr(len(name))); r == 0 {
+		return f
+	}
+	guid := strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(syscall.UTF16ToString(name), `\\?\`), `\`), "Volume")
+	key := rbVolumeKey + guid
+	if v, ok := rbRegDWORD(key, "NukeOnDelete"); ok && v == 1 {
+		f.off = true
+	}
+	f.capMB, f.capKnown = rbRegDWORD(key, "MaxCapacity")
+	return f
+}
+
+// binContents is the number of items and bytes in the bin of a drive.
+func binContents(root string) (items, bytes int64, ok bool) {
+	if root == "" {
+		return 0, 0, false
+	}
+	p, err := syscall.UTF16PtrFromString(root)
+	if err != nil {
+		return 0, 0, false
+	}
+	info := rbQueryInfo{cbSize: uint32(unsafe.Sizeof(rbQueryInfo{}))}
+	if hr, _, _ := rbSHQueryBin.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&info))); hr != 0 {
+		return 0, 0, false
+	}
+	return info.numItems, info.bytes, true
+}
+
+// rbRegDWORD reads a DWORD under HKEY_CURRENT_USER. A missing value is no
+// error, only "not set".
+func rbRegDWORD(subKey, name string) (uint32, bool) {
+	k, err := syscall.UTF16PtrFromString(subKey)
+	if err != nil {
+		return 0, false
+	}
+	var h syscall.Handle
+	if err := syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, k, 0, syscall.KEY_READ, &h); err != nil {
+		return 0, false
+	}
+	defer syscall.RegCloseKey(h) // ignore: closing a key that was only read
+	n, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, false
+	}
+	var typ, data uint32
+	size := uint32(unsafe.Sizeof(data))
+	if err := syscall.RegQueryValueEx(h, n, nil, &typ, (*byte)(unsafe.Pointer(&data)), &size); err != nil || typ != syscall.REG_DWORD {
+		return 0, false
+	}
+	return data, true
+}
+
+// recycleViaIFileOperation is the way Microsoft recommends since Vista; it
+// handles paths far beyond 260 characters.
+func recycleViaIFileOperation(abs string) error {
+	runtime.LockOSThread() // COM belongs to one thread
+	defer runtime.UnlockOSThread()
+	hr, _, _ := rbCoInitializeEx.Call(0, rbCoinitApartment)
+	if uint32(hr) != rbRPCChangedMode { // another mode is active: then do not uninitialise
+		defer rbCoUninitialize.Call() // ignore: has no result
+	}
+	var op unsafe.Pointer
+	hr, _, _ = rbCoCreate.Call(uintptr(unsafe.Pointer(&rbCLSIDFileOperation)), 0, rbClsctxInproc,
+		uintptr(unsafe.Pointer(&rbIIDFileOperation)), uintptr(unsafe.Pointer(&op)))
+	if int32(hr) < 0 || op == nil {
+		return fmt.Errorf("CoCreateInstance(IFileOperation): hr=0x%x", uint32(hr))
+	}
+	defer rbRelease(op)
+	flags := uintptr(rbFOFSilent | rbFOFNoConfirmation | rbFOFNoErrorUI | rbFOFNoConfirmMkdir | rbFOFAllowUndo | rbFOFXRecycle | rbFOFXEarlyFailure)
+	if hr := rbCall(op, rbIdxSetOperationFlags, flags); int32(hr) < 0 {
+		return fmt.Errorf("IFileOperation.SetOperationFlags: hr=0x%x", uint32(hr))
+	}
+	item, err := rbShellItem(abs)
+	if err != nil {
+		return err
+	}
+	defer rbRelease(item)
+	if hr := rbCall(op, rbIdxDeleteItem, uintptr(item), 0); int32(hr) < 0 {
+		return fmt.Errorf("IFileOperation.DeleteItem: hr=0x%x", uint32(hr))
+	}
+	if hr := rbCall(op, rbIdxPerformOperations); int32(hr) < 0 {
+		return fmt.Errorf("IFileOperation.PerformOperations: hr=0x%x", uint32(hr))
+	}
+	return nil
+}
+
+// rbShellItem makes an IShellItem from a path; long paths get the \\?\
+// prefix, which gets around the 260 character limit of the parser.
+func rbShellItem(abs string) (unsafe.Pointer, error) {
+	parse := abs
+	if len(abs) >= 240 && !strings.HasPrefix(abs, `\\?\`) {
+		parse = `\\?\` + abs
 	}
 	p, err := syscall.UTF16PtrFromString(parse)
 	if err != nil {
 		return nil, err
 	}
-	var psi unsafe.Pointer
-	hr, _, _ := procSHCreateItem.Call(
-		uintptr(unsafe.Pointer(p)),
-		0,
-		uintptr(unsafe.Pointer(&iidShellItem)),
-		uintptr(unsafe.Pointer(&psi)),
-	)
+	var item unsafe.Pointer
+	hr, _, _ := rbSHCreateItem.Call(uintptr(unsafe.Pointer(p)), 0, uintptr(unsafe.Pointer(&rbIIDShellItem)), uintptr(unsafe.Pointer(&item)))
 	runtime.KeepAlive(p)
-	if int32(hr) < 0 || psi == nil {
-		return nil, fmt.Errorf("SHCreateItemFromParsingName hr=0x%x", uint32(hr))
+	if int32(hr) < 0 || item == nil {
+		return nil, fmt.Errorf("SHCreateItemFromParsingName: hr=0x%x", uint32(hr))
 	}
-	return psi, nil
+	return item, nil
 }
 
-// callMethod calls the method at vtable[index] of a COM object. this points
-// to the COM object, args are the arguments AFTER the this pointer. this is
-// kept as unsafe.Pointer (not uintptr), so the pointer arithmetic goes
-// through unsafe.Add and go vet reports no "misuse of unsafe.Pointer". The
-// memory operations are the same as before.
-func callMethod(this unsafe.Pointer, index int, args ...uintptr) uintptr {
-	vtbl := *(*unsafe.Pointer)(this) // first field: pointer to the vtable
+// rbCall calls the method at place index of the vtable of a COM object.
+// this stays an unsafe.Pointer, so go vet sees no misuse of unsafe.Pointer.
+func rbCall(this unsafe.Pointer, index int, args ...uintptr) uintptr {
+	vtbl := *(*unsafe.Pointer)(this)
 	fn := *(*uintptr)(unsafe.Add(vtbl, uintptr(index)*unsafe.Sizeof(uintptr(0))))
-	call := append([]uintptr{uintptr(this)}, args...)
-	r, _, _ := syscall.SyscallN(fn, call...)
+	r, _, _ := syscall.SyscallN(fn, append([]uintptr{uintptr(this)}, args...)...)
 	return r
 }
 
-func release(this unsafe.Pointer) {
+func rbRelease(this unsafe.Pointer) {
 	if this != nil {
-		callMethod(this, idxRelease)
+		rbCall(this, rbIdxRelease)
 	}
 }
 
-// ----------------------------------------------------------------------------
-// Fallback: SHFileOperation (legacy, limited to MAX_PATH)
-// ----------------------------------------------------------------------------
-
-func recycleViaSHFileOperation(absPath string) error {
-	// The old shell API does NOT understand the \\?\ long path prefix.
-	cleanPath := strings.TrimPrefix(absPath, `\\?\`)
-
-	utf16Path, err := syscall.UTF16FromString(cleanPath)
+// recycleViaSHFileOperation is the old way (paths up to 260 characters,
+// without the \\?\ prefix, which it does not understand).
+func recycleViaSHFileOperation(abs string) error {
+	from, err := syscall.UTF16FromString(strings.TrimPrefix(abs, `\\?\`))
 	if err != nil {
 		return err
 	}
-	utf16Path = append(utf16Path, 0) // double-null-terminated
-
-	op := shFileOpStruct{
-		wFunc:  FO_DELETE,
-		pFrom:  &utf16Path[0],
-		fFlags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+	from = append(from, 0) // the list ends with two zeros
+	op := rbFileOp{
+		wFunc:  rbFODelete,
+		pFrom:  &from[0],
+		fFlags: rbFOFAllowUndo | rbFOFNoConfirmation | rbFOFSilent | rbFOFNoErrorUI,
 	}
-	ret, _, _ := procSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
-	runtime.KeepAlive(utf16Path)
-	if ret != 0 {
-		return fmt.Errorf("SHFileOperation: code=%d (path too long, or a drive without recycle bin)", ret)
+	r, _, _ := rbSHFileOperation.Call(uintptr(unsafe.Pointer(&op)))
+	runtime.KeepAlive(from)
+	if r != 0 {
+		return fmt.Errorf("SHFileOperation: code %d", r)
 	}
 	if op.fAnyOperationsAborted != 0 {
-		return fmt.Errorf("operation aborted")
+		return errors.New("SHFileOperation: aborted")
 	}
 	return nil
 }

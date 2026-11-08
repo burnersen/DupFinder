@@ -6,8 +6,10 @@
 
 package main
 
-import "fmt"
+import "errors"
 
+// moveToRecycleBin has no recycle bin to move to outside Windows: the file
+// stays where it is.
 func moveToRecycleBin(path string) error {
-	return fmt.Errorf("the recycle bin is only available on Windows")
+	return errors.Join(errors.New(path+": the recycle bin is only available on Windows"), errBinRefused)
 }

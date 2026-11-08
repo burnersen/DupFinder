@@ -291,7 +291,10 @@ func (s *server) handleDecide(w http.ResponseWriter, r *http.Request) {
 		switch d.Action {
 		case "delete":
 			if err := recycle(d.Path); err != nil {
-				deleteErrors = append(deleteErrors, fmt.Sprintf("%s: %v", d.Path, err))
+				// The error names the file itself. A file the recycle bin cannot
+				// take (too big, network drive, USB stick, bin switched off) stays
+				// where it is, and the reason is shown on the page.
+				deleteErrors = append(deleteErrors, err.Error())
 			}
 		case "ignore":
 			s.state.ignored.add(d.Path)
