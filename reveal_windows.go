@@ -39,11 +39,17 @@ import (
 // available or fails, like the recycle bin code falls back from
 // IFileOperation to SHFileOperation.
 //
-// COM initialisation (procCoInitializeEx/procCoUninit, COINIT_*) and the
-// shell32 handle come from recycle_windows.go (same package main).
 // ============================================================================
 
+// COINIT_APARTMENTTHREADED for CoInitializeEx.
+const COINIT_APARTMENTTHREADED = 0x2
+
 var (
+	shell32            = syscall.NewLazyDLL("shell32.dll")
+	ole32              = syscall.NewLazyDLL("ole32.dll")
+	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
+	procCoUninit       = ole32.NewProc("CoUninitialize")
+
 	procILCreateFromPath           = shell32.NewProc("ILCreateFromPathW")
 	procSHOpenFolderAndSelectItems = shell32.NewProc("SHOpenFolderAndSelectItems")
 	procILFree                     = shell32.NewProc("ILFree")

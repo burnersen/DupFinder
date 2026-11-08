@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -222,5 +223,37 @@ func TestStateSendsEmptyListWhenNothingFound(t *testing.T) {
 	rec := do(t, s, http.MethodGet, "/api/state", "", "")
 	if !strings.Contains(rec.Body.String(), `"clusters":[]`) {
 		t.Fatalf("got %s", rec.Body)
+	}
+}
+
+// Found 08.11.2026 (dev-starterkit F16): Windows deletes for good, without a
+// word, when the recycle bin cannot take a file (too big for it, network
+// drive, USB stick, bin switched off). moveToRecycleBin now refuses those
+// and keeps the file; the page must show why.
+func TestRefusedRecycleIsShownAndTheFileStays(t *testing.T) {
+	s, paths := testServer(t)
+	recycle = func(p string) error {
+		return fmt.Errorf("%s: the file is 5.0 GB, but the recycle bin of D:\\ holds only 2.0 GB: %w", p, errBinRefused)
+	}
+	t.Cleanup(func() { recycle = moveToRecycleBin })
+
+	body, _ := json.Marshal(map[string]any{"clusterId": "c1", "decisions": []decision{ // ignore: a fixed test value
+		{Path: paths[0], Action: "keep"}, {Path: paths[1], Action: "delete"},
+	}})
+	rec := do(t, s, http.MethodPost, "/api/decide", "application/json", string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decide: %d %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Errors []string `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Errors) != 1 || !strings.Contains(resp.Errors[0], "holds only 2.0 GB") || strings.Count(resp.Errors[0], paths[1]) != 1 {
+		t.Fatalf("errors: %q", resp.Errors)
+	}
+	if _, err := os.Stat(paths[1]); err != nil {
+		t.Fatalf("the refused file must stay: %v", err)
 	}
 }

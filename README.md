@@ -49,7 +49,7 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 - 🧠 **Content-based, not name-based.** It samples a handful of frames per video and compares them with a perceptual hash (pHash). That catches duplicates even across **different containers, resolutions or re-encodes**, not just byte-identical copies (though those are detected too, without decoding).
 - 🪟 **Local web UI.** Side-by-side comparison of each group: thumbnails, size, bitrate, resolution, codec and duration. The best value per column is highlighted, and the largest file is pre-selected as "keep".
 - ⌨️ **Fast keyboard review.** Walk through groups and decide in seconds (see shortcuts below).
-- 🛡️ **Safe with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), never a hard delete. Decisions are remembered between runs and can be undone.
+- 🛡️ **Safe with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), never a hard delete. If the recycle bin cannot take a file (bigger than its size limit, on a network drive or USB stick, or the bin is switched off for that drive), DupFinder keeps the file and tells you why, because Windows would otherwise delete it for good without asking. Decisions are remembered between runs and can be undone.
 - 💾 **Cached.** Results are stored, so a second scan of the same files is near-instant: only new or changed files are re-examined.
 - 🔒 **Stays on your machine.** The UI is served on this computer only (`127.0.0.1`), protected by a one-time key; nothing is uploaded anywhere.
 
@@ -84,7 +84,7 @@ The web UI opens by itself at `http://127.0.0.1:8765` (the next free port is use
 | `↑` / `↓` | Move between groups |
 | `?` | Show / hide the help panel |
 
-**Actions:** *Keep* leaves the file. *Delete* moves it to the recycle bin. *Ignore* excludes the file from future scans but leaves it where it is.
+**Actions:** *Keep* leaves the file. *Delete* moves it to the recycle bin, or keeps it and says why if the bin cannot take it. *Ignore* excludes the file from future scans but leaves it where it is.
 
 ---
 

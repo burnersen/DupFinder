@@ -1,16 +1,16 @@
 {
   "format": 1,
   "ffmpeg": {
-    "name": "FFmpeg n9.0.2-47-gb204e94e90",
-    "file": "ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip",
-    "size": 195293261,
-    "sha256": "8436c89156c3695659bf968e26bab5b08351ed8c86c3e9dbe3d6cc66a23af0a8",
+    "name": "FFmpeg n9.0.2-39-g7adfbe40dc",
+    "file": "ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip",
+    "size": 195110184,
+    "sha256": "693f3e224bc184b40524a62ca47526cfebaf2504414021b92fe75f677ad868b9",
     "license": "GPL-3.0-or-later",
-    "build": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-11-06-12-50",
-    "source": "https://github.com/FFmpeg/FFmpeg/tree/b204e94e90",
+    "build": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-31-12-59",
+    "source": "https://github.com/FFmpeg/FFmpeg/tree/7adfbe40dc",
     "urls": [
-      "https://github.com/burnersen/DupFinder/releases/download/runtime-v1/ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip",
-      "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-06-12-50/ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip"
+      "https://github.com/burnersen/DupFinder/releases/download/runtime-v1/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip",
+      "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip"
     ]
   }
 }
