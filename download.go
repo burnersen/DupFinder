@@ -9,8 +9,8 @@ package main
 // FFmpeg is not shipped with DupFinder. On first start exactly one build is
 // downloaded: the one pinned in runtime.json by name, size and SHA-256. The
 // sources are tried in order, first DupFinder's own mirror (release
-// runtime-v1, filled by the workflow "Mirror FFmpeg"), then the BtbN release
-// it was copied from. Which source answers does not matter: only a file with
+// runtime-v1, filled by the workflow "Mirror FFmpeg"), then the original
+// release it was copied from (an exact FFmpeg release, never a daily build). Which source answers does not matter: only a file with
 // exactly this size and checksum is unpacked, anything else is thrown away.
 //
 // A newer FFmpeg: change runtime.json, run "Mirror FFmpeg" (it checks the
@@ -83,7 +83,7 @@ func loadRuntime() (runtimeFiles, error) {
 
 // pinnedFile is one download that is accepted only if size and SHA-256 match.
 type pinnedFile struct {
-	Name   string // shown to the user, e.g. "FFmpeg n9.0.2"
+	Name   string // shown to the user, e.g. "FFmpeg 9.0.2"
 	URL    string
 	Size   int64
 	SHA256 string // lower case hex
@@ -245,8 +245,8 @@ func hostOf(url string) string {
 }
 
 // extractFFmpegBinaries unpacks exactly ffmpeg.exe and ffprobe.exe. The
-// archive has one root folder, e.g. "ffmpeg-n9.0.2-...-win64-gpl-9.0/bin/
-// ffmpeg.exe"; the match is on the path after that folder.
+// archive has one root folder, e.g. "ffmpeg-9.0.2-full_build/bin/ffmpeg.exe";
+// the match is on the path after that folder.
 func extractFFmpegBinaries(zipPath, targetDir string) error {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {

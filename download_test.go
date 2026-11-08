@@ -86,8 +86,11 @@ func TestRuntimeJSONPinsFFmpeg(t *testing.T) {
 	if !strings.HasPrefix(f.URLs[0], "https://github.com/burnersen/DupFinder/releases/download/runtime-v1/") {
 		t.Errorf("first source must be the own mirror, got %s", f.URLs[0])
 	}
-	if len(f.URLs) < 2 || !strings.HasPrefix(f.URLs[1], "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-") {
-		t.Errorf("second source must be a dated BtbN build, never latest: %v", f.URLs)
+	// An exact FFmpeg release that stays (dev-starterkit standard), never a
+	// daily, "latest" or git build: those change or disappear.
+	if len(f.URLs) < 2 || !strings.HasPrefix(f.URLs[1], "https://github.com/GyanD/codexffmpeg/releases/download/") ||
+		strings.Contains(f.URLs[1], "latest") || strings.Contains(f.URLs[1], "-git-") || strings.Contains(f.URLs[1], "autobuild") {
+		t.Errorf("second source must be an exact release build, never latest or daily: %v", f.URLs)
 	}
 	if f.License == "" || f.Source == "" || f.Build == "" {
 		t.Error("license, source and build must be named (GPL: the mirror links the source)")

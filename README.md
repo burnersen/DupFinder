@@ -170,7 +170,7 @@ What is signed, who approves it and what DupFinder sends over the network (only 
 
 ### FFmpeg
 
-DupFinder does **not** bundle FFmpeg. On first run it downloads one fixed static build from the [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) project onto your machine (about 190 MB, pinned by size and SHA-256 in [`runtime.json`](runtime.json), mirrored in the release [`runtime-v1`](https://github.com/burnersen/DupFinder/releases/tag/runtime-v1)), or you provide your own copy. FFmpeg is a separate work by the [FFmpeg project](https://ffmpeg.org) under its own license; DupFinder invokes it as an external program.
+DupFinder does **not** bundle FFmpeg. On first run it downloads one fixed build of the FFmpeg release 9.0.2 onto your machine (the "full" build of [gyan.dev](https://www.gyan.dev/ffmpeg/builds/), about 250 MB, pinned by size and SHA-256 in [`runtime.json`](runtime.json), mirrored in the release [`runtime-v1`](https://github.com/burnersen/DupFinder/releases/tag/runtime-v1)), or you provide your own copy. FFmpeg is a separate work by the [FFmpeg project](https://ffmpeg.org) under its own license; DupFinder invokes it as an external program.
 
 ---
 
