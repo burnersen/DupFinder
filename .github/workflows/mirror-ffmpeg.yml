@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Copies the FFmpeg build pinned in runtime.json into DupFinder's own
-# release "runtime-v1", so the download keeps working when BtbN removes old
-# builds (dev-starterkit 08-sicherheit.md S4).
+# release "runtime-v1", so the download keeps working even if the original
+# source goes away (dev-starterkit 08-security.md S4). The build is an exact
+# FFmpeg release (dev-starterkit standard since 3.2: 9.0.2, the full build of
+# gyan.dev), never a daily or "latest" build.
 #
-# Every run fetches the build from BtbN, checks size and SHA-256 against
+# Every run fetches the build from its original source (the first URL in
+# runtime.json that is not the mirror), checks size and SHA-256 against
 # runtime.json and runs DupFinder's live tests with it (real frames, real
 # duplicates). Only "Run workflow" by hand publishes; a pull request that
 # changes runtime.json or this file gets the same checks without publishing.
@@ -40,8 +43,8 @@ jobs:
         run: |
           $ProgressPreference = 'SilentlyContinue' # the progress bar slows the download down a lot
           $f = (Get-Content runtime.json -Raw | ConvertFrom-Json).ffmpeg
-          $upstream = $f.urls | Where-Object { $_ -like 'https://github.com/BtbN/*' } | Select-Object -First 1
-          if (-not $upstream) { Write-Host '::error::runtime.json has no BtbN source'; exit 1 }
+          $upstream = $f.urls | Where-Object { $_ -notlike 'https://github.com/burnersen/DupFinder/*' } | Select-Object -First 1
+          if (-not $upstream) { Write-Host '::error::runtime.json has no original source besides the mirror'; exit 1 }
           Invoke-WebRequest -Uri $upstream -OutFile $f.file
           $size = (Get-Item $f.file).Length
           $hash = (Get-FileHash $f.file -Algorithm SHA256).Hash.ToLower()
@@ -72,8 +75,8 @@ jobs:
           $notes = @"
           Files DupFinder downloads on first start. Not a DupFinder release: get DupFinder from the latest release.
 
-          **$($f.name)**, Windows x64 build by BtbN, unchanged copy.
-          License: $($f.license) (LICENSE.txt in the archive). Source: [FFmpeg]($($f.source)), [build scripts and the sources of all included libraries]($($f.build)).
+          **$($f.name)**, unchanged copy of the Windows x64 build from [its release]($($f.build)).
+          License: $($f.license) (the license text is in the archive). Source: [FFmpeg]($($f.source)); the build and the versions of all included libraries are named on [the release page]($($f.build)) and in README.txt in the archive.
 
           DupFinder checks size ($($f.size) bytes) and SHA-256 ($($f.sha256)) before it unpacks anything.
           "@
