@@ -18,7 +18,7 @@
 <sub>🇩🇪 Auf Deutsch: [tech.burnersen.de/tools/dupfinder](https://tech.burnersen.de/tools/dupfinder/)</sub>
 
 <!-- Optional: drop a screenshot at .github/screenshot.png and uncomment:
-<img src=".github/screenshot.png" alt="DupFinder web UI showing a duplicate group" width="860">
+<img src=".github/screenshot.png" alt="The DupFinder web UI with one duplicate group: the same holiday video as 1080p H.264, 720p HEVC and 480p H.264 side by side, with size, bitrate, resolution and codec compared, the largest file preselected as Keep and the other two as Delete" width="860">
 -->
 
 </div>
@@ -182,7 +182,7 @@ Found a bug or have a feature wish? Please open an issue on the [GitHub reposito
 
 ## ☕ Support
 
-DupFinder is free and made in my spare time. If it saved you some disk space and you'd like to say thanks, you can [buy me a coffee on Ko-fi](https://ko-fi.com/burnersen). Completely optional, and thank you!
+DupFinder is free and made in my spare time, on my own hardware and electricity bill. If it saved you time or a pile of disk space and you'd like to say thanks, you can [drop a little something in the tip jar on Ko-fi](https://ko-fi.com/burnersen), it keeps motivation and coffee flowing. ☕ Completely optional, and either way: thank you for using it!
 
 ---
 
