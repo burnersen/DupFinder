@@ -17,9 +17,7 @@
 
 <sub>🇩🇪 Auf Deutsch: [tech.burnersen.de/tools/dupfinder](https://tech.burnersen.de/tools/dupfinder/)</sub>
 
-<!-- Optional: drop a screenshot at .github/screenshot.png and uncomment:
 <img src=".github/screenshot.png" alt="The DupFinder web UI with one duplicate group: the same holiday video as 1080p H.264, 720p HEVC and 480p H.264 side by side, with size, bitrate, resolution and codec compared, the largest file preselected as Keep and the other two as Delete" width="860">
--->
 
 </div>
 
