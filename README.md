@@ -148,7 +148,7 @@ If SmartScreen blocks the start: click **"More info" → "Run anyway"**.
 go build -o DupFinder.exe .
 ```
 
-Requires Go 1.27.3, the version in `go.mod` (any Go from 1.21 on fetches it by itself). FFmpeg is **not** needed to build: it is downloaded at runtime, never embedded. A local build calls itself `dev`; `go test ./...` runs the tests.
+Requires Go 1.27.4, the version in `go.mod` (any Go from 1.21 on fetches it by itself). FFmpeg is **not** needed to build: it is downloaded at runtime, never embedded. A local build calls itself `dev`; `go test ./...` runs the tests.
 
 Releases are built by the [release workflow](.github/workflows/release.yml) on GitHub: write `.github/release-notes/X.Y.Z.md`, then push a tag `vX.Y.Z`. The version comes from the tag only (a local build says `dev`); the release carries `DupFinder.exe` and `SHA256SUMS.txt`. It also writes name and version into the file properties (from [`winres/winres.json`](winres/winres.json)) and, once code signing is switched on, has the exe signed: see [`.signpath/README.md`](.signpath/README.md). "Run workflow" with "dry run" ticked builds and checks everything without publishing.
 
