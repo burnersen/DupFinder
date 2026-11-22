@@ -29,6 +29,8 @@
 
 ---
 
+> ⚠️ **Before you start:** DupFinder is free hobby software without any warranty, and you use it at your own risk. Check each group before you delete, and keep backups of anything irreplaceable. Details in the disclaimer at the end.
+
 ## ⚡ 30 seconds, no manual
 
 1. Download `DupFinder.exe`, a single file with nothing to install.
@@ -47,7 +49,7 @@ On first run DupFinder fetches FFmpeg automatically: no setup, no PATH fiddling,
 - 🧠 **Content-based, not name-based.** It samples a handful of frames per video and compares them with a perceptual hash (pHash). That catches duplicates even across **different containers, resolutions or re-encodes**, not just byte-identical copies (though those are detected too, without decoding).
 - 🪟 **Local web UI.** Side-by-side comparison of each group: thumbnails, size, bitrate, resolution, codec and duration. The best value per column is highlighted, and the largest file is pre-selected as "keep".
 - ⌨️ **Fast keyboard review.** Walk through groups and decide in seconds (see shortcuts below).
-- 🛡️ **Safe with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), never a hard delete. If the recycle bin cannot take a file (bigger than its size limit, on a network drive or USB stick, or the bin is switched off for that drive), DupFinder keeps the file and tells you why, because Windows would otherwise delete it for good without asking. Decisions are remembered between runs and can be undone.
+- 🛡️ **Careful with your files.** "Delete" moves a file to the **Windows recycle bin** (recoverable), not a hard delete. If the recycle bin cannot take a file (bigger than its size limit, on a network drive or USB stick, or the bin is switched off for that drive), DupFinder keeps the file and tells you why, because Windows would otherwise delete it for good without asking. Decisions are remembered between runs and can be undone.
 - 💾 **Cached.** Results are stored, so a second scan of the same files is near-instant: only new or changed files are re-examined.
 - 🔒 **Stays on your machine.** The UI is served on this computer only (`127.0.0.1`), protected by a one-time key; nothing is uploaded anywhere.
 
@@ -186,4 +188,6 @@ DupFinder is free and made in my spare time, on my own hardware and electricity 
 
 ## ⚠️ Disclaimer
 
-DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care (deleted files go to the recycle bin, not a permanent delete), but you use it **at your own risk**. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See sections 15 and 16 of the [license](LICENSE).
+DupFinder is free hobby software, provided **"as is", without any warranty or condition of any kind**. It was built and tested with care, but you use it **at your own risk**. Look at a group before you delete, and keep backups of anything irreplaceable.
+
+Where this README describes what DupFinder does, checks or never does, that is how it is designed to work, not a promise or guarantee: software can have bugs, and systems, services and other programs do not always behave as expected. As far as the applicable law allows, the author is not liable for any damages or data loss arising from the use of this software. See sections 15 and 16 of the [license](LICENSE).
